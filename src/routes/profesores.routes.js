@@ -3,26 +3,23 @@ const auth = require('../middlewares/auth');
 const isAdmin = require('../middlewares/isAdmin');
 const { body } = require('express-validator');
 const validate = require('../middlewares/validate');
+const profesoresController = require('../controllers/profesores.controller');
 
-// Solo admin puede crear o borrar profesores
 router.post('/',
   auth,
   isAdmin,
   [
     body('nombre').notEmpty().withMessage('El nombre es obligatorio'),
     body('correo').isEmail().withMessage('Correo inválido'),
-    body('usuario').notEmpty(),
+    body('usuario').notEmpty().withMessage('El usuario es obligatorio'),
     body('contrasena').isLength({ min: 8 }).withMessage('Mínimo 8 caracteres'),
   ],
   validate,
-  require('../controllers/profesores.controller').crear
+  profesoresController.crear
 );
 
-router.delete('/:id', auth, isAdmin,
-  require('../controllers/profesores.controller').borrar
-);
+router.delete('/:id', auth, isAdmin, profesoresController.borrar);
 
-// Cualquier profesor autenticado puede ver la lista
-router.get('/', auth, require('../controllers/profesores.controller').listar);
+router.get('/', auth, profesoresController.listar);
 
 module.exports = router;
