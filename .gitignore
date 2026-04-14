@@ -2,3 +2,6 @@ node_modules/
 .env
 data/
 uploads/
+firebase-debug.log
+firebase-debug.*.log
+firebase-config/
