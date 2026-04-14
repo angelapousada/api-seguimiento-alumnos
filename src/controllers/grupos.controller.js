@@ -1,4 +1,4 @@
-const db = require('../config/db');
+const pool = require('../config/db');
 
 const listar = async (req, res) => {
   try {
@@ -8,11 +8,11 @@ const listar = async (req, res) => {
     const conditions = [];
 
     if (id_asignatura) {
-      conditions.push('g.id_asignatura = ?');
+      conditions.push('g.id_asignatura = $' + (params.length + 1));
       params.push(id_asignatura);
     }
     if (tipo) {
-      conditions.push('g.tipo = ?');
+      conditions.push('g.tipo = $' + (params.length + 1));
       params.push(tipo);
     }
 
@@ -21,8 +21,9 @@ const listar = async (req, res) => {
     }
 
     query += ' ORDER BY g.nombre';
-    const stmt = db.prepare(query);
-    const rows = params.length > 0 ? stmt.all(...params) : stmt.all();
+    const { rows } = params.length > 0 
+      ? await pool.query(query, params) 
+      : await pool.query(query);
     res.json(rows);
   } catch (error) {
     console.error('Error listar grupos:', error);
@@ -33,14 +34,16 @@ const listar = async (req, res) => {
 const obtener = async (req, res) => {
   try {
     const { id } = req.params;
-    const stmt = db.prepare(`SELECT g.*, p.nombre as nombre_profesor FROM grupos g LEFT JOIN profesores p ON g.id_profesor = p.id WHERE g.id = ?`);
-    const rows = stmt.all(id);
+    const { rows } = await pool.query(
+      `SELECT g.*, p.nombre as nombre_profesor FROM grupos g LEFT JOIN profesores p ON g.id_profesor = p.id WHERE g.id = $1`,
+      [id]
+    );
 
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Grupo no encontrado' });
     }
 
-    const horarios = db.prepare('SELECT * FROM horarios WHERE id_grupo = ?').all(id);
+    const { rows: horarios } = await pool.query('SELECT * FROM horarios WHERE id_grupo = $1', [id]);
     rows[0].horarios = horarios;
 
     res.json(rows[0]);
@@ -51,59 +54,82 @@ const obtener = async (req, res) => {
 };
 
 const crear = async (req, res) => {
+  const client = await pool.connect();
   try {
     const { nombre, tipo, aula, id_asignatura, id_profesor, horarios } = req.body;
 
-    const result = db.prepare(
-      'INSERT INTO grupos (nombre, tipo, aula, id_asignatura, id_profesor) VALUES (?, ?, ?, ?, ?)'
-    ).run(nombre, tipo, aula, id_asignatura, id_profesor);
+    await client.query('BEGIN');
 
-    const id_grupo = result.lastInsertRowid;
+    const result = await client.query(
+      'INSERT INTO grupos (nombre, tipo, aula, id_asignatura, id_profesor) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [nombre, tipo, aula, id_asignatura, id_profesor]
+    );
+
+    const id_grupo = result.rows[0].id;
 
     if (horarios && horarios.length > 0) {
-      const insertHorario = db.prepare('INSERT INTO horarios (dia, hora_inicio, hora_fin, id_grupo) VALUES (?, ?, ?, ?)');
       for (const h of horarios) {
-        insertHorario.run(h.dia, h.hora_inicio, h.hora_fin, id_grupo);
+        await client.query(
+          'INSERT INTO horarios (dia, hora_inicio, hora_fin, id_grupo) VALUES ($1, $2, $3, $4)',
+          [h.dia, h.hora_inicio, h.hora_fin, id_grupo]
+        );
       }
     }
 
+    await client.query('COMMIT');
+
     res.status(201).json({ message: 'Grupo creado correctamente', id: id_grupo });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error crear grupo:', error);
     res.status(500).json({ error: 'Error del servidor' });
+  } finally {
+    client.release();
   }
 };
 
 const actualizar = async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
     const { nombre, tipo, aula, id_profesor, horarios } = req.body;
 
-    db.prepare('UPDATE grupos SET nombre = ?, tipo = ?, aula = ?, id_profesor = ? WHERE id = ?')
-      .run(nombre, tipo, aula, id_profesor, id);
+    await client.query('BEGIN');
 
-    db.prepare('DELETE FROM horarios WHERE id_grupo = ?').run(id);
+    await client.query(
+      'UPDATE grupos SET nombre = $1, tipo = $2, aula = $3, id_profesor = $4 WHERE id = $5',
+      [nombre, tipo, aula, id_profesor, id]
+    );
+
+    await client.query('DELETE FROM horarios WHERE id_grupo = $1', [id]);
 
     if (horarios && horarios.length > 0) {
-      const insertHorario = db.prepare('INSERT INTO horarios (dia, hora_inicio, hora_fin, id_grupo) VALUES (?, ?, ?, ?)');
       for (const h of horarios) {
-        insertHorario.run(h.dia, h.hora_inicio, h.hora_fin, id);
+        await client.query(
+          'INSERT INTO horarios (dia, hora_inicio, hora_fin, id_grupo) VALUES ($1, $2, $3, $4)',
+          [h.dia, h.hora_inicio, h.hora_fin, id]
+        );
       }
     }
 
+    await client.query('COMMIT');
+
     res.json({ message: 'Grupo actualizado correctamente' });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error actualizar grupo:', error);
     res.status(500).json({ error: 'Error del servidor' });
+  } finally {
+    client.release();
   }
 };
 
 const eliminar = async (req, res) => {
   try {
     const { id } = req.params;
-    const result = db.prepare('DELETE FROM grupos WHERE id = ?').run(id);
+    const result = await pool.query('DELETE FROM grupos WHERE id = $1', [id]);
 
-    if (result.changes === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Grupo no encontrado' });
     }
 
@@ -117,8 +143,13 @@ const eliminar = async (req, res) => {
 const listarEstudiantes = async (req, res) => {
   try {
     const { id_grupo } = req.params;
-    const stmt = db.prepare(`SELECT e.*, hag.id as id_relacion FROM estudiantes_asignatura_grupo hag JOIN estudiantes_asignatura ea ON hag.id_estudiante_asignatura = ea.id JOIN estudiantes e ON ea.id_estudiante = e.id WHERE hag.id_grupo = ? ORDER BY e.nombre`);
-    const rows = stmt.all(id_grupo);
+    const { rows } = await pool.query(
+      `SELECT e.*, hag.id as id_relacion FROM estudiantes_asignatura_grupo hag 
+       JOIN estudiantes_asignatura ea ON hag.id_estudiante_asignatura = ea.id 
+       JOIN estudiantes e ON ea.id_estudiante = e.id 
+       WHERE hag.id_grupo = $1 ORDER BY e.nombre`,
+      [id_grupo]
+    );
     res.json(rows);
   } catch (error) {
     console.error('Error listar estudiantes del grupo:', error);
@@ -131,18 +162,27 @@ const agregarEstudiante = async (req, res) => {
     const { id_grupo } = req.params;
     const { id_estudiante, id_asignatura } = req.body;
 
-    let relacion = db.prepare('SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?').all(id_estudiante, id_asignatura);
+    let { rows: relacion } = await pool.query(
+      'SELECT id FROM estudiantes_asignatura WHERE id_estudiante = $1 AND id_asignatura = $2',
+      [id_estudiante, id_asignatura]
+    );
 
     let id_relacion;
     if (relacion.length === 0) {
-      const result = db.prepare('INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura) VALUES (?, ?)').run(id_estudiante, id_asignatura);
-      id_relacion = result.lastInsertRowid;
+      const result = await pool.query(
+        'INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura) VALUES ($1, $2) RETURNING id',
+        [id_estudiante, id_asignatura]
+      );
+      id_relacion = result.rows[0].id;
     } else {
       id_relacion = relacion[0].id;
     }
 
     try {
-      db.prepare('INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo) VALUES (?, ?)').run(id_relacion, id_grupo);
+      await pool.query(
+        'INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo) VALUES ($1, $2)',
+        [id_relacion, id_grupo]
+      );
     } catch (e) {
       // Ignore duplicate
     }
@@ -159,7 +199,10 @@ const moverEstudiante = async (req, res) => {
     const { id_grupo_destino } = req.params;
     const { id_estudiante_asignatura_grupo } = req.body;
 
-    db.prepare('UPDATE estudiantes_asignatura_grupo SET id_grupo = ? WHERE id = ?').run(id_grupo_destino, id_estudiante_asignatura_grupo);
+    await pool.query(
+      'UPDATE estudiantes_asignatura_grupo SET id_grupo = $1 WHERE id = $2',
+      [id_grupo_destino, id_estudiante_asignatura_grupo]
+    );
 
     res.json({ message: 'Estudiante movido correctamente' });
   } catch (error) {

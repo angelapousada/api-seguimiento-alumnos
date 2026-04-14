@@ -1,9 +1,9 @@
 const bcrypt = require('bcrypt');
-const db = require('../config/db');
+const pool = require('../config/db');
 
 const listar = async (req, res) => {
   try {
-    const rows = db.prepare('SELECT id, nombre, correo, usuario, rol, created_at FROM profesores').all();
+    const { rows } = await pool.query('SELECT id, nombre, correo, usuario, rol, created_at FROM profesores');
     res.json(rows);
   } catch (error) {
     console.error('Error listar profesores:', error);
@@ -15,19 +15,23 @@ const crear = async (req, res) => {
   try {
     const { nombre, correo, usuario, contrasena } = req.body;
 
-    const existing = db.prepare('SELECT id FROM profesores WHERE usuario = ? OR correo = ?').all(usuario, correo);
+    const existing = await pool.query(
+      'SELECT id FROM profesores WHERE usuario = $1 OR correo = $2',
+      [usuario, correo]
+    );
 
-    if (existing.length > 0) {
+    if (existing.rows.length > 0) {
       return res.status(400).json({ error: 'El usuario o correo ya existe' });
     }
 
     const hashedPassword = await bcrypt.hash(contrasena, 10);
 
-    const result = db.prepare(
-      'INSERT INTO profesores (nombre, correo, usuario, contrasena, rol) VALUES (?, ?, ?, ?, ?)'
-    ).run(nombre, correo, usuario, hashedPassword, 'profesor');
+    const result = await pool.query(
+      'INSERT INTO profesores (nombre, correo, usuario, contrasena, rol) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [nombre, correo, usuario, hashedPassword, 'profesor']
+    );
 
-    res.status(201).json({ message: 'Profesor creado correctamente', id: result.lastInsertRowid });
+    res.status(201).json({ message: 'Profesor creado correctamente', id: result.rows[0].id });
   } catch (error) {
     console.error('Error crear profesor:', error);
     res.status(500).json({ error: 'Error del servidor' });
@@ -38,9 +42,9 @@ const borrar = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const result = db.prepare('DELETE FROM profesores WHERE id = ?').run(id);
+    const result = await pool.query('DELETE FROM profesores WHERE id = $1', [id]);
 
-    if (result.changes === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Profesor no encontrado' });
     }
 

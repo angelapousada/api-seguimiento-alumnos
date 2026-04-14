@@ -1,6 +1,6 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const db = require('../config/db');
+const pool = require('../config/db');
 
 const login = async (req, res) => {
   try {
@@ -10,8 +10,7 @@ const login = async (req, res) => {
       return res.status(400).json({ error: 'Usuario y contraseña son obligatorios' });
     }
 
-    const stmt = db.prepare('SELECT * FROM profesores WHERE usuario = ?');
-    const rows = stmt.all(usuario);
+    const { rows } = await pool.query('SELECT * FROM profesores WHERE usuario = $1', [usuario]);
 
     if (rows.length === 0) {
       return res.status(401).json({ error: 'Credenciales inválidas' });
@@ -50,19 +49,23 @@ const register = async (req, res) => {
   try {
     const { nombre, correo, usuario, contrasena } = req.body;
 
-    const existing = db.prepare('SELECT id FROM profesores WHERE usuario = ? OR correo = ?').all(usuario, correo);
+    const existing = await pool.query(
+      'SELECT id FROM profesores WHERE usuario = $1 OR correo = $2',
+      [usuario, correo]
+    );
 
-    if (existing.length > 0) {
+    if (existing.rows.length > 0) {
       return res.status(400).json({ error: 'El usuario o correo ya existe' });
     }
 
     const hashedPassword = await bcrypt.hash(contrasena, 10);
 
-    const result = db.prepare(
-      'INSERT INTO profesores (nombre, correo, usuario, contrasena, rol) VALUES (?, ?, ?, ?, ?)'
-    ).run(nombre, correo, usuario, hashedPassword, 'profesor');
+    const result = await pool.query(
+      'INSERT INTO profesores (nombre, correo, usuario, contrasena, rol) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [nombre, correo, usuario, hashedPassword, 'profesor']
+    );
 
-    res.status(201).json({ message: 'Profesor creado correctamente', id: result.lastInsertRowid });
+    res.status(201).json({ message: 'Profesor creado correctamente', id: result.rows[0].id });
   } catch (error) {
     console.error('Error en register:', error);
     res.status(500).json({ error: 'Error del servidor' });
