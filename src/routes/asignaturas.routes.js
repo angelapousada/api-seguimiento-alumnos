@@ -99,4 +99,77 @@ router.post('/desactivar/:id', auth, isAdmin, (req, res) => {
   }
 });
 
+// POST /api/asignaturas/guardar-carga - guardar asignatura cargada desde SIES con estudiantes
+router.post('/guardar-carga', auth, (req, res) => {
+  const { nombre, curso, titulacion, estudiantes } = req.body;
+
+  if (!nombre || !estudiantes || !Array.isArray(estudiantes)) {
+    return res.status(400).json({ error: 'nombre y estudiantes son obligatorios' });
+  }
+
+  try {
+    const guardar = db.transaction(() => {
+      const titulacionRow = db.prepare('SELECT id FROM titulaciones WHERE id = ? OR nombre LIKE ?').get(titulacion, `%${titulacion}%`);
+      let titulacionId = titulacionRow?.id || 'default';
+
+      if (!titulacionRow) {
+        db.prepare('INSERT INTO titulaciones (id, nombre) VALUES (?, ?)').run(titulacionId, titulacion);
+      }
+
+      let asignatura = db.prepare('SELECT id FROM catalogo_asignaturas WHERE nombre = ? AND id_titulacion = ?').get(nombre, titulacionId);
+
+      if (!asignatura) {
+        const r = db.prepare(`
+          INSERT INTO catalogo_asignaturas (nombre, codigo, id_titulacion, curso, creada)
+          VALUES (?, ?, ?, ?, 1)
+        `).run(nombre, nombre.substring(0, 10).toUpperCase(), titulacionId, curso || '1');
+        asignatura = { id: r.lastInsertRowid };
+      }
+
+      for (const est of estudiantes) {
+        let estudiante = db.prepare('SELECT id FROM estudiantes WHERE dni = ?').get(est.dni);
+
+        if (!estudiante && est.dni) {
+          const r = db.prepare(`
+            INSERT INTO estudiantes (dni, nombre, correo, movilidad)
+            VALUES (?, ?, ?, ?)
+          `).run(est.dni, est.nombre, est.correo, est.movilidad || 'No');
+          estudiante = { id: r.lastInsertRowid };
+        }
+
+        if (!estudiante) {
+          estudiante = db.prepare('SELECT id FROM estudiantes WHERE nombre = ? AND dni IS NULL').get(est.nombre);
+          if (!estudiante) {
+            const r = db.prepare(`
+              INSERT INTO estudiantes (nombre, correo, movilidad)
+              VALUES (?, ?, ?)
+            `).run(est.nombre, est.correo, est.movilidad || 'No');
+            estudiante = { id: r.lastInsertRowid };
+          }
+        }
+
+        let ea = db.prepare('SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?').get(estudiante.id, asignatura.id);
+
+        if (!ea) {
+          const r = db.prepare(`
+            INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula)
+            VALUES (?, ?, ?)
+          `).run(estudiante.id, asignatura.id, 'Si');
+          ea = { id: r.lastInsertRowid };
+        }
+      }
+
+      return asignatura;
+    });
+
+    const asignatura = guardar();
+    const asignaturaCompleta = db.prepare('SELECT * FROM catalogo_asignaturas WHERE id = ?').get(asignatura.id);
+
+    return res.status(201).json(asignaturaCompleta);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error al guardar la carga' });
+  }
+});
+
 module.exports = router;

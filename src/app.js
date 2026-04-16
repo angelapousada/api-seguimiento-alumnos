@@ -11,10 +11,13 @@ require('./config/db');
 const authRoutes = require('./routes/auth.routes');
 const usuariosRoutes = require('./routes/usuarios.routes');
 const asignaturasRoutes = require('./routes/asignaturas.routes');
+const asignaturasDetallesRoutes = require('./routes/asignaturas-detalles.routes');
 const gruposRoutes = require('./routes/grupos.routes');
 const sesionesRoutes = require('./routes/sesiones.routes');
 const examenesRoutes = require('./routes/examenes.routes');
 const estudiantesRoutes = require('./routes/estudiantes.routes');
+const cargaRoutes = require('./routes/carga.routes');
+const adminRoutes = require('./routes/admin.routes');
 
 const app = express();
 
@@ -27,10 +30,13 @@ app.use(morgan('dev'));
 app.use('/api/auth', authRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/asignaturas', asignaturasRoutes);
+app.use('/api/asignaturas', asignaturasDetallesRoutes);
 app.use('/api/grupos', gruposRoutes);
 app.use('/api/sesiones', sesionesRoutes);
 app.use('/api/examenes', examenesRoutes);
 app.use('/api/estudiantes', estudiantesRoutes);
+app.use('/api/carga', cargaRoutes);
+app.use('/api/admin', adminRoutes);
 
 // ─── Ruta raíz de comprobación ───────────────────────────────────────────────
 app.get('/', (req, res) => {

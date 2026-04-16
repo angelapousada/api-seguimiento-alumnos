@@ -271,4 +271,21 @@ function poblarDatosIniciales() {
 
 poblarDatosIniciales();
 
+// ─── Usuario admin por defecto ───────────────────────────────────────────────
+
+function seedAdmin() {
+  const bcrypt = require('bcrypt');
+  const existing = db.prepare("SELECT id FROM usuarios WHERE correo = ?").get('uo271160@uniovi.es');
+  if (existing) return;
+
+  const hash = bcrypt.hashSync('admin123', 10);
+  db.prepare(`
+    INSERT INTO usuarios (nombre, apellidos, correo, usuario, contrasena, rol)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run('Admin', 'UO', 'uo271160@uniovi.es', 'uo271160', hash, 0);
+  console.log('[DB] Usuario admin creado: uo271160@uniovi.es');
+}
+
+seedAdmin();
+
 module.exports = db;

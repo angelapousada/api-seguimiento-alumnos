@@ -112,15 +112,32 @@ router.put('/:id', auth, (req, res) => {
   }
 });
 
-// DELETE /api/usuarios/:id - eliminar usuario (admin)
+// DELETE /api/usuarios/:id - eliminar usuario (admin) manteniendo valoraciones
 router.delete('/:id', auth, isAdmin, (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = db.prepare('DELETE FROM usuarios WHERE id = ?').run(id);
-    if (result.changes === 0) {
+    const usuario = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
+    if (!usuario) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
+
+    if (usuario.rol !== 1) {
+      return res.status(400).json({ error: 'Solo se pueden eliminar cuentas de profesor' });
+    }
+
+    const tieneValoraciones = db.prepare(`
+      SELECT COUNT(*) as cnt FROM sesiones WHERE id_profesor = ?
+    `).get(id);
+
+    if (tieneValoraciones.cnt > 0) {
+      return res.status(400).json({
+        error: 'No se puede eliminar el profesor porque tiene sesiones asociadas',
+        sesiones: tieneValoraciones.cnt
+      });
+    }
+
+    const result = db.prepare('DELETE FROM usuarios WHERE id = ?').run(id);
     return res.json({ mensaje: 'Usuario eliminado correctamente' });
   } catch (err) {
     console.error(err);

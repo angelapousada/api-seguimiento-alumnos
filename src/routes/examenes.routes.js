@@ -76,6 +76,38 @@ router.delete('/:id', auth, (req, res) => {
   }
 });
 
+// PUT /api/examenes/:id - editar examen
+router.put('/:id', auth, (req, res) => {
+  const { id } = req.params;
+  const { fecha, nombre, hora_inicio, aulas, id_grupo } = req.body;
+
+  try {
+    const examen = db.prepare('SELECT * FROM examenes WHERE id = ?').get(id);
+    if (!examen) {
+      return res.status(404).json({ error: 'Examen no encontrado' });
+    }
+
+    db.prepare(`
+      UPDATE examenes
+      SET fecha = ?, nombre = ?, hora_inicio = ?, aulas = ?, id_grupo = ?
+      WHERE id = ?
+    `).run(
+      fecha !== undefined ? fecha : examen.fecha,
+      nombre !== undefined ? nombre : examen.nombre,
+      hora_inicio !== undefined ? hora_inicio : examen.hora_inicio,
+      aulas !== undefined ? aulas : examen.aulas,
+      id_grupo !== undefined ? id_grupo : examen.id_grupo,
+      id
+    );
+
+    const actualizado = db.prepare('SELECT * FROM examenes WHERE id = ?').get(id);
+    return res.json(actualizado);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error al editar examen' });
+  }
+});
+
 // GET /api/examenes/:id/asistencias - lista asistencias al examen
 router.get('/:id/asistencias', auth, (req, res) => {
   try {
