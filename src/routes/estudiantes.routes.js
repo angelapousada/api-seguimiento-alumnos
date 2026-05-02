@@ -4,9 +4,12 @@ const auth = require('../middlewares/auth');
 
 const router = express.Router();
 
-// GET /api/estudiantes/buscar?q=texto - buscar por nombre, DNI o correo
+// GET /api/estudiantes/buscar?q=texto[&id_asignatura=X&excluir_grupo=Y]
+// Si se pasa id_asignatura, devuelve además id_estudiante_asignatura y filtra
+// solo a estudiantes matriculados en esa asignatura. Si además se pasa
+// excluir_grupo, omite los que ya están en ese grupo.
 router.get('/buscar', auth, (req, res) => {
-  const { q } = req.query;
+  const { q, id_asignatura, excluir_grupo } = req.query;
 
   if (!q || q.trim() === '') {
     return res.status(400).json({ error: 'El parámetro q es obligatorio' });
@@ -14,6 +17,33 @@ router.get('/buscar', auth, (req, res) => {
 
   try {
     const termino = `%${q.trim()}%`;
+
+    if (id_asignatura) {
+      const params = [id_asignatura, termino, termino, termino];
+      let sql = `
+        SELECT
+          e.id, e.dni, e.nombre, e.correo, e.movilidad, e.ruta_imagen,
+          ea.id AS id_estudiante_asignatura,
+          ea.matricula, ea.convocatorias, ea.matriculas
+        FROM estudiantes e
+        JOIN estudiantes_asignatura ea ON ea.id_estudiante = e.id
+        WHERE ea.id_asignatura = ?
+          AND (e.nombre LIKE ? OR e.dni LIKE ? OR e.correo LIKE ?)
+      `;
+      if (excluir_grupo) {
+        sql += `
+          AND ea.id NOT IN (
+            SELECT id_estudiante_asignatura
+            FROM estudiantes_asignatura_grupo
+            WHERE id_grupo = ?
+          )
+        `;
+        params.push(excluir_grupo);
+      }
+      sql += ' ORDER BY e.nombre LIMIT 50';
+      return res.json(db.prepare(sql).all(...params));
+    }
+
     const estudiantes = db.prepare(`
       SELECT * FROM estudiantes
       WHERE nombre LIKE ?
@@ -327,6 +357,41 @@ router.post('/:id/cambiar-grupo', auth, (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error al cambiar de grupo' });
+  }
+});
+
+// PUT /api/estudiantes/:id/matricula - actualizar el campo matricula (Si/No)
+// para una asignatura concreta. Permite anular o reactivar matrícula.
+router.put('/:id/matricula', auth, (req, res) => {
+  const { id } = req.params;
+  const { id_asignatura, matricula } = req.body;
+
+  if (!id_asignatura || (matricula !== 'Si' && matricula !== 'No')) {
+    return res.status(400).json({
+      error: 'id_asignatura es obligatorio y matricula debe ser "Si" o "No"',
+    });
+  }
+
+  try {
+    const ea = db
+      .prepare(
+        'SELECT * FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?'
+      )
+      .get(id, id_asignatura);
+    if (!ea) {
+      return res.status(404).json({ error: 'El estudiante no está matriculado en esa asignatura' });
+    }
+
+    db.prepare('UPDATE estudiantes_asignatura SET matricula = ? WHERE id = ?').run(matricula, ea.id);
+
+    const actualizado = db
+      .prepare('SELECT * FROM estudiantes_asignatura WHERE id = ?')
+      .get(ea.id);
+
+    return res.json(actualizado);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error al actualizar la matrícula' });
   }
 });
 

@@ -1,9 +1,15 @@
 require('dotenv').config();
 const fs = require('fs');
+const path = require('path');
 const https = require('https');
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+
+if (!process.env.JWT_SECRET) {
+  console.error('[FATAL] Falta JWT_SECRET en .env. Aborto el arranque.');
+  process.exit(1);
+}
 
 // Inicializar DB (crea tablas y datos iniciales al importar)
 require('./config/db');
@@ -25,6 +31,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // ─── Rutas ───────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);

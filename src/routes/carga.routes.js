@@ -8,7 +8,32 @@ const auth = require('../middlewares/auth');
 
 const router = express.Router();
 
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+  dest: 'uploads/',
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ext === '.xlsx' || ext === '.xls') return cb(null, true);
+    return cb(new Error('Solo se aceptan archivos .xlsx o .xls'));
+  },
+});
+
+const PERFILES_DIR = path.join(__dirname, '../../uploads/perfiles');
+if (!fs.existsSync(PERFILES_DIR)) {
+  fs.mkdirSync(PERFILES_DIR, { recursive: true });
+}
+
+const IMG_EXTS = ['.jpg', '.jpeg', '.png'];
+
+const uploadPerfiles = multer({
+  dest: 'uploads/',
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (IMG_EXTS.includes(ext)) return cb(null, true);
+    return cb(null, false);
+  },
+});
 
 router.post('/asignaturas', auth, upload.single('archivo'), (req, res) => {
   if (!req.file) {
@@ -184,7 +209,7 @@ router.post('/imagenes', auth, upload.single('archivo'), (req, res) => {
         if (dni) {
           const result = db.prepare(`
             UPDATE estudiantes SET ruta_imagen = ? WHERE dni = ?
-          `).run(rutaImagen || 'Si', dni);
+          `).run(rutaImagen || 'Sin asignar', dni);
           if (result.changes > 0) actualizados++;
         }
       }
@@ -202,6 +227,67 @@ router.post('/imagenes', auth, upload.single('archivo'), (req, res) => {
     if (req.file && req.file.path) fs.unlinkSync(req.file.path);
     return res.status(500).json({ error: 'Error al procesar el archivo' });
   }
+});
+
+// POST /api/carga/imagenes-archivos
+// Sube imágenes jpg/jpeg/png. Cada nombre de fichero (sin extensión)
+// se compara con correo o DNI de un estudiante. Si coincide, se guarda
+// en uploads/perfiles/ y se actualiza estudiantes.ruta_imagen.
+router.post('/imagenes-archivos', auth, uploadPerfiles.array('imagenes', 200), (req, res) => {
+  const ficheros = req.files || [];
+  if (ficheros.length === 0) {
+    return res.status(400).json({ error: 'No se han recibido imágenes válidas (jpg/jpeg/png).' });
+  }
+
+  const resultado = {
+    actualizados: 0,
+    no_coincidentes: [],
+    errores: [],
+  };
+
+  const stmtBuscar = db.prepare(
+    'SELECT id, correo, dni FROM estudiantes WHERE LOWER(correo) = LOWER(?) OR dni = ?'
+  );
+  const stmtActualizar = db.prepare(
+    'UPDATE estudiantes SET ruta_imagen = ? WHERE id = ?'
+  );
+
+  for (const f of ficheros) {
+    try {
+      const ext = path.extname(f.originalname).toLowerCase();
+      const baseRaw = path.basename(f.originalname, ext).trim();
+
+      if (!baseRaw) {
+        fs.unlinkSync(f.path);
+        resultado.no_coincidentes.push(f.originalname);
+        continue;
+      }
+
+      const estudiante = stmtBuscar.get(baseRaw, baseRaw);
+      if (!estudiante) {
+        fs.unlinkSync(f.path);
+        resultado.no_coincidentes.push(f.originalname);
+        continue;
+      }
+
+      const safe = baseRaw.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const destinoRel = path.join('uploads', 'perfiles', `${safe}${ext}`);
+      const destinoAbs = path.join(__dirname, '../../', destinoRel);
+
+      fs.renameSync(f.path, destinoAbs);
+      stmtActualizar.run(`/${destinoRel.replace(/\\/g, '/')}`, estudiante.id);
+      resultado.actualizados++;
+    } catch (err) {
+      console.error('[carga/imagenes-archivos]', err);
+      resultado.errores.push(`${f.originalname}: ${err.message}`);
+      try { fs.unlinkSync(f.path); } catch (_) {}
+    }
+  }
+
+  return res.json({
+    mensaje: 'Imágenes procesadas',
+    ...resultado,
+  });
 });
 
 module.exports = router;

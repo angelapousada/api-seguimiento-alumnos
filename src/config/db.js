@@ -39,6 +39,8 @@ db.exec(`
     id_titulacion TEXT NOT NULL,
     curso TEXT NOT NULL,
     creada INTEGER DEFAULT 0,
+    fecha_inicio TEXT,
+    fecha_fin TEXT,
     FOREIGN KEY (id_titulacion) REFERENCES titulaciones(id)
   );
 
@@ -174,6 +176,19 @@ db.exec(`
     UNIQUE(id_examen, id_estudiante_asignatura_grupo)
   );
 `);
+
+// ─── Migraciones suaves (columnas añadidas a tablas existentes) ─────────────
+
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+    console.log(`[DB] Añadida columna ${table}.${column}`);
+  }
+}
+
+ensureColumn('catalogo_asignaturas', 'fecha_inicio', 'TEXT');
+ensureColumn('catalogo_asignaturas', 'fecha_fin', 'TEXT');
 
 // ─── Datos iniciales ─────────────────────────────────────────────────────────
 

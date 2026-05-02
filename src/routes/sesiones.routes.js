@@ -190,14 +190,14 @@ router.get('/:id/asistencias', auth, (req, res) => {
 // POST /api/sesiones/:id/asistencias - guardar asistencias (upsert)
 router.post('/:id/asistencias', auth, (req, res) => {
   const { id } = req.params;
-  const { id_estudiante_asignatura_grupo, asistencia, posicion, comentario, otro_grupo } = req.body;
+  const lista = Array.isArray(req.body) ? req.body : [req.body];
 
-  if (!id_estudiante_asignatura_grupo) {
-    return res.status(400).json({ error: 'id_estudiante_asignatura_grupo es obligatorio' });
+  if (lista.length === 0) {
+    return res.status(400).json({ error: 'Se esperaba al menos una asistencia' });
   }
 
   try {
-    db.prepare(`
+    const upsert = db.prepare(`
       INSERT INTO asistencia_sesion
         (id_sesion, id_estudiante_asignatura_grupo, asistencia, posicion, comentario, otro_grupo)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -207,19 +207,73 @@ router.post('/:id/asistencias', auth, (req, res) => {
         posicion = excluded.posicion,
         comentario = excluded.comentario,
         otro_grupo = excluded.otro_grupo
-    `).run(
-      id,
-      id_estudiante_asignatura_grupo,
-      asistencia || 'No',
-      posicion || 0,
-      comentario || null,
-      otro_grupo || 'No'
-    );
+    `);
 
-    return res.json({ mensaje: 'Asistencia guardada correctamente' });
+    const guardar = db.transaction(() => {
+      for (const a of lista) {
+        if (!a.id_estudiante_asignatura_grupo) continue;
+        upsert.run(
+          id,
+          a.id_estudiante_asignatura_grupo,
+          a.asistencia || 'No',
+          a.posicion || 0,
+          a.comentario || null,
+          a.otro_grupo || 'No'
+        );
+      }
+    });
+
+    guardar();
+    return res.json({ mensaje: 'Asistencias guardadas correctamente' });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error al guardar asistencia' });
+  }
+});
+
+// GET /api/sesiones/:id/buscar-otros-grupos?q=
+// Busca alumnos matriculados en la asignatura de la sesión, en grupos del
+// mismo tipo, pero NO en el grupo de la sesión. Devuelve cada (estudiante, EAG)
+// con id_estudiante_asignatura_grupo del grupo de origen y nombre_grupo_origen.
+router.get('/:id/buscar-otros-grupos', auth, (req, res) => {
+  const { q } = req.query;
+  if (!q || q.trim() === '') {
+    return res.status(400).json({ error: 'El parámetro q es obligatorio' });
+  }
+
+  try {
+    const sesion = db
+      .prepare(
+        `SELECT s.id, g.id AS id_grupo, g.tipo, g.id_asignatura
+         FROM sesiones s JOIN grupos g ON g.id = s.id_grupo
+         WHERE s.id = ?`
+      )
+      .get(req.params.id);
+    if (!sesion) return res.status(404).json({ error: 'Sesión no encontrada' });
+
+    const termino = `%${q.trim()}%`;
+    const resultados = db
+      .prepare(
+        `SELECT
+           e.id, e.dni, e.nombre, e.correo, e.movilidad, e.ruta_imagen,
+           eag.id AS id_estudiante_asignatura_grupo,
+           g.nombre AS nombre_grupo_origen
+         FROM estudiantes e
+         JOIN estudiantes_asignatura ea ON ea.id_estudiante = e.id
+         JOIN estudiantes_asignatura_grupo eag ON eag.id_estudiante_asignatura = ea.id
+         JOIN grupos g ON g.id = eag.id_grupo
+         WHERE ea.id_asignatura = ?
+           AND g.tipo = ?
+           AND g.id <> ?
+           AND (e.nombre LIKE ? OR e.dni LIKE ? OR e.correo LIKE ?)
+         ORDER BY e.nombre LIMIT 50`
+      )
+      .all(sesion.id_asignatura, sesion.tipo, sesion.id_grupo, termino, termino, termino);
+
+    return res.json(resultados);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error al buscar' });
   }
 });
 
