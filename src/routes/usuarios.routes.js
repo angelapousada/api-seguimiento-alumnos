@@ -85,7 +85,7 @@ router.post('/', auth, isAdmin, async (req, res) => {
 // PUT /api/usuarios/:id - actualizar usuario (auth)
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
-  const { nombre, apellidos, idioma } = req.body;
+  const { nombre, apellidos, idioma, ids_asignatura, nombres_asignatura } = req.body;
 
   try {
     const usuario = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
@@ -93,14 +93,23 @@ router.put('/:id', auth, (req, res) => {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
+    const idsJSON = ids_asignatura !== undefined
+      ? JSON.stringify(Array.isArray(ids_asignatura) ? ids_asignatura : [])
+      : usuario.ids_asignatura;
+    const nombresJSON = nombres_asignatura !== undefined
+      ? JSON.stringify(Array.isArray(nombres_asignatura) ? nombres_asignatura : [])
+      : usuario.nombres_asignatura;
+
     db.prepare(`
       UPDATE usuarios
-      SET nombre = ?, apellidos = ?, idioma = ?
+      SET nombre = ?, apellidos = ?, idioma = ?, ids_asignatura = ?, nombres_asignatura = ?
       WHERE id = ?
     `).run(
       nombre !== undefined ? nombre : usuario.nombre,
       apellidos !== undefined ? apellidos : usuario.apellidos,
       idioma !== undefined ? idioma : usuario.idioma,
+      idsJSON,
+      nombresJSON,
       id
     );
 

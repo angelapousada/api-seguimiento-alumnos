@@ -289,3 +289,4 @@ function seedAdmin() {
 seedAdmin();
 
 module.exports = db;
+module.exports.poblarDatosIniciales = poblarDatosIniciales;
