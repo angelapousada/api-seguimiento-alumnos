@@ -4,7 +4,6 @@ const auth = require('../middlewares/auth');
 
 const router = express.Router();
 
-// GET /api/sesiones - lista sesiones con filtro opcional por grupo
 router.get('/', auth, (req, res) => {
   const { id_grupo } = req.query;
 
@@ -20,7 +19,6 @@ router.get('/', auth, (req, res) => {
     query += ' ORDER BY fecha DESC, hora_inicio DESC';
     const sesiones = db.prepare(query).all(...params);
 
-    // Adjuntar conceptos a cada sesión
     const getConceptos = db.prepare('SELECT * FROM conceptos WHERE id_sesion = ?');
     const resultado = sesiones.map((s) => ({
       ...s,
@@ -34,7 +32,6 @@ router.get('/', auth, (req, res) => {
   }
 });
 
-// GET /api/sesiones/:id - obtener sesión con conceptos
 router.get('/:id', auth, (req, res) => {
   try {
     const sesion = db.prepare('SELECT * FROM sesiones WHERE id = ?').get(req.params.id);
@@ -49,7 +46,6 @@ router.get('/:id', auth, (req, res) => {
   }
 });
 
-// POST /api/sesiones - crear sesión (con conceptos opcionales)
 router.post('/', auth, (req, res) => {
   const { fecha, hora_inicio, hora_fin, aula, id_grupo, id_profesor, conceptos } = req.body;
 
@@ -96,7 +92,6 @@ router.post('/', auth, (req, res) => {
   }
 });
 
-// DELETE /api/sesiones/:id - eliminar sesión
 router.delete('/:id', auth, (req, res) => {
   try {
     const result = db.prepare('DELETE FROM sesiones WHERE id = ?').run(req.params.id);
@@ -110,7 +105,6 @@ router.delete('/:id', auth, (req, res) => {
   }
 });
 
-// PUT /api/sesiones/:id - editar sesión
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
   const { fecha, hora_inicio, hora_fin, aula, id_grupo, id_profesor, conceptos } = req.body;
@@ -157,7 +151,6 @@ router.put('/:id', auth, (req, res) => {
   }
 });
 
-// GET /api/sesiones/:id/asistencias - lista asistencias de la sesión
 router.get('/:id/asistencias', auth, (req, res) => {
   try {
     const asistencias = db.prepare(`
@@ -187,7 +180,6 @@ router.get('/:id/asistencias', auth, (req, res) => {
   }
 });
 
-// POST /api/sesiones/:id/asistencias - guardar asistencias (upsert)
 router.post('/:id/asistencias', auth, (req, res) => {
   const { id } = req.params;
   const lista = Array.isArray(req.body) ? req.body : [req.body];
@@ -231,10 +223,6 @@ router.post('/:id/asistencias', auth, (req, res) => {
   }
 });
 
-// GET /api/sesiones/:id/buscar-otros-grupos?q=
-// Busca alumnos matriculados en la asignatura de la sesión, en grupos del
-// mismo tipo, pero NO en el grupo de la sesión. Devuelve cada (estudiante, EAG)
-// con id_estudiante_asignatura_grupo del grupo de origen y nombre_grupo_origen.
 router.get('/:id/buscar-otros-grupos', auth, (req, res) => {
   const { q } = req.query;
   if (!q || q.trim() === '') {
@@ -277,7 +265,6 @@ router.get('/:id/buscar-otros-grupos', auth, (req, res) => {
   }
 });
 
-// POST /api/sesiones/:id/entregas - guardar entregas
 router.post('/:id/entregas', auth, (req, res) => {
   const { id } = req.params;
   const entregas = req.body;
@@ -317,7 +304,6 @@ router.post('/:id/entregas', auth, (req, res) => {
   }
 });
 
-// GET /api/sesiones/:id/entregas - obtener entregas de la sesión
 router.get('/:id/entregas', auth, (req, res) => {
   try {
     const entregas = db.prepare(`
@@ -345,7 +331,6 @@ router.get('/:id/entregas', auth, (req, res) => {
   }
 });
 
-// POST /api/sesiones/:id/valoraciones - guardar valoraciones
 router.post('/:id/valoraciones', auth, (req, res) => {
   const { id } = req.params;
   const valoraciones = req.body;
@@ -385,7 +370,6 @@ router.post('/:id/valoraciones', auth, (req, res) => {
   }
 });
 
-// GET /api/sesiones/:id/valoraciones - obtener valoraciones de la sesión
 router.get('/:id/valoraciones', auth, (req, res) => {
   try {
     const valoraciones = db.prepare(`
@@ -411,6 +395,52 @@ router.get('/:id/valoraciones', auth, (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error al obtener valoraciones' });
+  }
+});
+
+router.post('/:id/conceptos', auth, (req, res) => {
+  const { id } = req.params;
+  const { descripcion } = req.body;
+
+  if (!descripcion || !descripcion.trim()) {
+    return res.status(400).json({ error: 'descripcion es obligatoria' });
+  }
+
+  try {
+    const sesion = db.prepare('SELECT id FROM sesiones WHERE id = ?').get(id);
+    if (!sesion) {
+      return res.status(404).json({ error: 'Sesión no encontrada' });
+    }
+
+    const result = db.prepare(
+      'INSERT INTO conceptos (descripcion, id_sesion) VALUES (?, ?)'
+    ).run(descripcion.trim(), id);
+
+    const nuevo = db.prepare('SELECT * FROM conceptos WHERE id = ?').get(result.lastInsertRowid);
+    return res.status(201).json(nuevo);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error al añadir concepto' });
+  }
+});
+
+router.delete('/:id/conceptos/:idConcepto', auth, (req, res) => {
+  const { id, idConcepto } = req.params;
+
+  try {
+    const concepto = db.prepare(
+      'SELECT * FROM conceptos WHERE id = ? AND id_sesion = ?'
+    ).get(idConcepto, id);
+
+    if (!concepto) {
+      return res.status(404).json({ error: 'Concepto no encontrado en esta sesión' });
+    }
+
+    db.prepare('DELETE FROM conceptos WHERE id = ?').run(idConcepto);
+    return res.json({ mensaje: 'Concepto eliminado correctamente' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error al eliminar concepto' });
   }
 });
 

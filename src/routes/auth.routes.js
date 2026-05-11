@@ -5,7 +5,6 @@ const db = require('../config/db');
 
 const router = express.Router();
 
-// POST /api/auth/login
 router.post('/login', async (req, res) => {
   const { correo, contrasena } = req.body;
 
@@ -42,6 +41,7 @@ router.post('/login', async (req, res) => {
         ids_asignatura: parseJSON(usuario.ids_asignatura),
         nombres_asignatura: parseJSON(usuario.nombres_asignatura),
         idioma: usuario.idioma,
+        ruta_imagen: usuario.ruta_imagen,
       },
     });
   } catch (err) {

@@ -1,10 +1,30 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const db = require('../config/db');
 const auth = require('../middlewares/auth');
 const isAdmin = require('../middlewares/isAdmin');
 
 const router = express.Router();
+
+const PERFILES_DIR = path.join(__dirname, '../../uploads/perfiles');
+if (!fs.existsSync(PERFILES_DIR)) {
+  fs.mkdirSync(PERFILES_DIR, { recursive: true });
+}
+
+const IMG_EXTS = ['.jpg', '.jpeg', '.png'];
+
+const uploadImagenPerfil = multer({
+  dest: 'uploads/',
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (IMG_EXTS.includes(ext)) return cb(null, true);
+    return cb(null, false);
+  },
+});
 
 function parseJSON(value) {
   try {
@@ -25,11 +45,11 @@ function formatUsuario(u) {
     ids_asignatura: parseJSON(u.ids_asignatura),
     nombres_asignatura: parseJSON(u.nombres_asignatura),
     idioma: u.idioma,
+    ruta_imagen: u.ruta_imagen,
     created_at: u.created_at,
   };
 }
 
-// GET /api/usuarios - lista todos los usuarios (admin)
 router.get('/', auth, isAdmin, (req, res) => {
   try {
     const usuarios = db.prepare('SELECT * FROM usuarios').all();
@@ -40,7 +60,6 @@ router.get('/', auth, isAdmin, (req, res) => {
   }
 });
 
-// POST /api/usuarios - crear usuario (admin)
 router.post('/', auth, isAdmin, async (req, res) => {
   const { nombre, apellidos, correo, contrasena, rol, ids_asignatura, nombres_asignatura } = req.body;
 
@@ -82,7 +101,6 @@ router.post('/', auth, isAdmin, async (req, res) => {
   }
 });
 
-// PUT /api/usuarios/:id - actualizar usuario (auth)
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
   const { nombre, apellidos, idioma, ids_asignatura, nombres_asignatura } = req.body;
@@ -93,12 +111,33 @@ router.put('/:id', auth, (req, res) => {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    const idsJSON = ids_asignatura !== undefined
-      ? JSON.stringify(Array.isArray(ids_asignatura) ? ids_asignatura : [])
-      : usuario.ids_asignatura;
-    const nombresJSON = nombres_asignatura !== undefined
-      ? JSON.stringify(Array.isArray(nombres_asignatura) ? nombres_asignatura : [])
-      : usuario.nombres_asignatura;
+    let idsJSON;
+    let nombresJSON;
+    if (ids_asignatura !== undefined) {
+      const idsArr = Array.isArray(ids_asignatura) ? ids_asignatura : [];
+      idsJSON = JSON.stringify(idsArr);
+      // Derivamos nombres_asignatura desde el catálogo para que siempre
+      // estén sincronizados con la BD (independiente de lo que mande el front).
+      if (idsArr.length === 0) {
+        nombresJSON = JSON.stringify([]);
+      } else {
+        const placeholders = idsArr.map(() => '?').join(',');
+        const filas = db
+          .prepare(
+            `SELECT id, nombre FROM catalogo_asignaturas WHERE id IN (${placeholders})`
+          )
+          .all(...idsArr);
+        const porId = new Map(filas.map((r) => [String(r.id), r.nombre]));
+        nombresJSON = JSON.stringify(
+          idsArr.map((x) => porId.get(String(x)) ?? String(x))
+        );
+      }
+    } else {
+      idsJSON = usuario.ids_asignatura;
+      nombresJSON = nombres_asignatura !== undefined
+        ? JSON.stringify(Array.isArray(nombres_asignatura) ? nombres_asignatura : [])
+        : usuario.nombres_asignatura;
+    }
 
     db.prepare(`
       UPDATE usuarios
@@ -121,7 +160,53 @@ router.put('/:id', auth, (req, res) => {
   }
 });
 
-// DELETE /api/usuarios/:id - eliminar usuario (admin) manteniendo valoraciones
+router.post('/:id/imagen', auth, uploadImagenPerfil.single('imagen'), (req, res) => {
+  const { id } = req.params;
+  const fichero = req.file;
+
+  if (!fichero) {
+    return res.status(400).json({ error: 'Imagen no proporcionada (jpg/jpeg/png).' });
+  }
+
+  // Solo el propio usuario o un admin pueden cambiar la imagen.
+  if (String(req.user.id) !== String(id) && req.user.rol !== 0) {
+    try { fs.unlinkSync(fichero.path); } catch (_) {}
+    return res.status(403).json({ error: 'No autorizado' });
+  }
+
+  try {
+    const usuario = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
+    if (!usuario) {
+      try { fs.unlinkSync(fichero.path); } catch (_) {}
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const ext = path.extname(fichero.originalname).toLowerCase();
+    const base = `usuario_${id}`;
+    const destinoRel = path.join('uploads', 'perfiles', `${base}${ext}`);
+    const destinoAbs = path.join(__dirname, '../../', destinoRel);
+
+    // Limpiamos versiones anteriores con cualquier extensión.
+    for (const e of IMG_EXTS) {
+      const previo = path.join(PERFILES_DIR, `${base}${e}`);
+      if (previo !== destinoAbs && fs.existsSync(previo)) {
+        try { fs.unlinkSync(previo); } catch (_) {}
+      }
+    }
+
+    fs.renameSync(fichero.path, destinoAbs);
+    const rutaFinal = `/${destinoRel.replace(/\\/g, '/')}`;
+    db.prepare('UPDATE usuarios SET ruta_imagen = ? WHERE id = ?').run(rutaFinal, id);
+
+    const actualizado = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
+    return res.json(formatUsuario(actualizado));
+  } catch (err) {
+    console.error('[usuarios/imagen]', err);
+    try { fs.unlinkSync(fichero.path); } catch (_) {}
+    return res.status(500).json({ error: 'Error al guardar la imagen' });
+  }
+});
+
 router.delete('/:id', auth, isAdmin, (req, res) => {
   const { id } = req.params;
 

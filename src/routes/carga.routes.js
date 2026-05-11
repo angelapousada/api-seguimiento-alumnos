@@ -229,10 +229,6 @@ router.post('/imagenes', auth, upload.single('archivo'), (req, res) => {
   }
 });
 
-// POST /api/carga/imagenes-archivos
-// Sube imágenes jpg/jpeg/png. Cada nombre de fichero (sin extensión)
-// se compara con correo o DNI de un estudiante. Si coincide, se guarda
-// en uploads/perfiles/ y se actualiza estudiantes.ruta_imagen.
 router.post('/imagenes-archivos', auth, uploadPerfiles.array('imagenes', 200), (req, res) => {
   const ficheros = req.files || [];
   if (ficheros.length === 0) {

@@ -4,7 +4,6 @@ const auth = require('../middlewares/auth');
 
 const router = express.Router();
 
-// GET /api/examenes - lista exámenes con filtro opcional por grupo
 router.get('/', auth, (req, res) => {
   const { id_grupo } = req.query;
 
@@ -26,7 +25,6 @@ router.get('/', auth, (req, res) => {
   }
 });
 
-// GET /api/examenes/:id - obtener examen por ID
 router.get('/:id', auth, (req, res) => {
   try {
     const examen = db.prepare('SELECT * FROM examenes WHERE id = ?').get(req.params.id);
@@ -40,7 +38,6 @@ router.get('/:id', auth, (req, res) => {
   }
 });
 
-// POST /api/examenes - crear examen
 router.post('/', auth, (req, res) => {
   const { fecha, nombre, hora_inicio, aulas, id_grupo } = req.body;
 
@@ -62,7 +59,6 @@ router.post('/', auth, (req, res) => {
   }
 });
 
-// DELETE /api/examenes/:id - eliminar examen
 router.delete('/:id', auth, (req, res) => {
   try {
     const result = db.prepare('DELETE FROM examenes WHERE id = ?').run(req.params.id);
@@ -76,7 +72,6 @@ router.delete('/:id', auth, (req, res) => {
   }
 });
 
-// PUT /api/examenes/:id - editar examen
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
   const { fecha, nombre, hora_inicio, aulas, id_grupo } = req.body;
@@ -108,7 +103,6 @@ router.put('/:id', auth, (req, res) => {
   }
 });
 
-// GET /api/examenes/:id/asistencias - lista asistencias al examen
 router.get('/:id/asistencias', auth, (req, res) => {
   try {
     const asistencias = db.prepare(`
@@ -135,7 +129,6 @@ router.get('/:id/asistencias', auth, (req, res) => {
   }
 });
 
-// POST /api/examenes/:id/asistencias - guardar asistencias al examen (upsert)
 router.post('/:id/asistencias', auth, (req, res) => {
   const { id } = req.params;
   const asistencias = req.body;

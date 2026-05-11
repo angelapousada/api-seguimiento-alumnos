@@ -5,11 +5,8 @@ const DB_PATH = path.join(__dirname, '../../data/seguimiento.db');
 
 const db = new Database(DB_PATH);
 
-// Activar foreign keys
 db.pragma('foreign_keys = ON');
 db.pragma('journal_mode = WAL');
-
-// ─── Crear tablas ───────────────────────────────────────────────────────────
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS usuarios (
@@ -177,8 +174,6 @@ db.exec(`
   );
 `);
 
-// ─── Migraciones suaves (columnas añadidas a tablas existentes) ─────────────
-
 function ensureColumn(table, column, ddl) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!cols.some((c) => c.name === column)) {
@@ -189,8 +184,8 @@ function ensureColumn(table, column, ddl) {
 
 ensureColumn('catalogo_asignaturas', 'fecha_inicio', 'TEXT');
 ensureColumn('catalogo_asignaturas', 'fecha_fin', 'TEXT');
-
-// ─── Datos iniciales ─────────────────────────────────────────────────────────
+ensureColumn('estudiantes_asignatura', 'evaluacion_diferenciada', "TEXT DEFAULT 'No'");
+ensureColumn('usuarios', 'ruta_imagen', "TEXT DEFAULT 'Sin asignar'");
 
 function poblarDatosIniciales() {
   const existing = db.prepare('SELECT COUNT(*) as cnt FROM titulaciones').get();
@@ -202,69 +197,96 @@ function poblarDatosIniciales() {
   );
 
   const seed = db.transaction(() => {
-    // Titulaciones
-    insertTitulacion.run('giitt', 'Grado en Ingeniería en Tecnologías y Servicios de Telecomunicación');
+    insertTitulacion.run('giitt', 'Grado en Ingeniería Informática en Tecnologías de la Información');
     insertTitulacion.run('giisof', 'Grado en Ingeniería Informática del Software');
 
-    // ── Catálogo compartido (mismo para ambas titulaciones) ──────────────────
-    const titulaciones = ['giitt', 'giisof'];
-
-    // Año 1
+    // Cores comunes a ambos grados (sin TFG, sin slots Optativa I/II/III).
     const ano1 = [
       ['Álgebra Lineal', 'AL'],
-      ['Organización y Estructura de Computadores', 'OyE'],
+      ['Ondas y Electromagnetismo', 'OE'],
       ['Cálculo', 'CAL'],
       ['Estadística', 'EST'],
       ['Empresa', 'EMP'],
-      ['Fundamentos de Circuitos y Redes', 'FCR'],
-      ['Física', 'FI'],
-      ['Análisis Matemático y Diferencial', 'AMD'],
+      ['Fundamentos de Computadores y Redes', 'FCR'],
+      ['Fundamentos de Informática', 'FINF'],
+      ['Autómatas y Matemáticas Discretas', 'AMD'],
       ['Introducción a la Programación', 'IP'],
       ['Metodología de la Programación', 'MP'],
     ];
 
-    // Año 2
     const ano2 = [
-      ['Tecnología Electrónica y Comunicaciones', 'TEC'],
+      ['Tecnología Electrónica de Computadores', 'TEC'],
       ['Sistemas Operativos', 'SO'],
       ['Arquitectura de Computadores', 'AC'],
-      ['Computación de Altas Prestaciones y Microprocesadores', 'CPM'],
+      ['Comunicación Persona-Máquina', 'CPM'],
       ['Estructuras de Datos', 'ED'],
       ['Bases de Datos', 'BD'],
-      ['Tecnologías y Paradigmas de la Programación', 'TPP'],
-      ['Comunicaciones y Redes', 'CN'],
-      ['Compiladores', 'COMP'],
-      ['Algoritmos', 'ALG'],
+      ['Tecnología y Paradigmas de la Programación', 'TPP'],
+      ['Computación Numérica', 'CN'],
+      ['Computabilidad', 'COMP'],
+      ['Algoritmia', 'ALG'],
     ];
 
-    // Año 3
-    const ano3 = [
-      ['Redes de Información', 'RI'],
-      ['Sistemas Distribuidos', 'SDI'],
-      ['Sistemas y Entornos Web', 'SEW'],
-      ['Arquitectura y Servicios de Redes', 'ASR'],
+    const ano3Giisof = [
+      ['Repositorios de Información', 'RI'],
+      ['Sistemas Distribuidos e Internet', 'SDI'],
+      ['Software y Estándares para la Web', 'SEW'],
+      ['Administración de Sistemas y Redes', 'ASR'],
       ['Ingeniería del Proceso Software', 'IPS'],
-      ['Seguridad en Sistemas Informáticos', 'SSI'],
-      ['Diseño de Software', 'DS'],
+      ['Seguridad de Sistemas Informáticos', 'SSI'],
+      ['Diseño del Software', 'DS'],
       ['Arquitectura del Software', 'AS'],
-      ['Optativa 1', 'OP1'],
       ['Diseño de Lenguajes de Programación', 'DLP'],
     ];
 
-    // Año 4
-    const ano4 = [
+    const ano3Giitt = [
+      ['Redes de Computadores', 'RC'],
+      ['Ingeniería del Software', 'IS'],
+      ['Configuración y Evaluación de Sistemas', 'CES'],
+      ['Administración de Sistemas', 'AS'],
+      ['Programación Concurrente y Paralela', 'PCP'],
       ['Sistemas Inteligentes', 'SI'],
-      ['Desarrollo de Proyectos de Programación', 'DPP'],
-      ['Ingeniería de Requisitos', 'IR'],
-      ['Aspectos Sociales y Legales de la Ingeniería del Software', 'ASLEP'],
-      ['Calidad, Verificación y Validación', 'CVV'],
-      ['Prácticas en Empresa', 'PE'],
-      ['Optativa 2', 'OP2'],
-      ['Trabajo Fin de Grado', 'TFG'],
-      ['Optativa 3', 'OP3'],
+      ['Sistemas Distribuidos', 'SD'],
+      ['Infraestructura Informática', 'II'],
+      ['Ingeniería de Redes', 'IR'],
+      ['Sistemas de Información', 'SI2'],
     ];
 
-    for (const tit of titulaciones) {
+    const ano4Cores = [
+      ['Sistemas Inteligentes', 'SI'],
+      ['Dirección y Planificación de Proyectos Informáticos', 'DPP'],
+      ['Ingeniería de Requisitos', 'IR'],
+      ['Aspectos Sociales, Legales, Éticos y Profesionales de la Informática', 'ASLEP'],
+      ['Calidad, Validación y Verificación del Software', 'CVV'],
+      ['Prácticas Externas', 'PE'],
+    ];
+
+    // Optativas concretas por grado, todas en 4º curso.
+    const optativasGiisof = [
+      ['Informática Audiovisual', 'IAUD'],
+      ['Integración de Aplicaciones Empresariales', 'IAE'],
+      ['Realidad y Accesibilidad Aumentadas', 'RAA'],
+      ['Software de Entretenimiento y Videojuegos', 'SEV'],
+      ['Software para Robots', 'SR'],
+      ['Informática Forense y Auditoría', 'IFA'],
+      ['Modelos en Ingeniería del Software', 'MIS'],
+      ['Sistemas de Información para la Web', 'SIW'],
+      ['Software para Dispositivos Móviles', 'SDM'],
+    ];
+
+    const optativasGiitt = [
+      ['Prácticas en Empresa', 'PEMP'],
+      ['Aspectos Legales y Profesionales de la Informática', 'ALPI'],
+      ['Servicios Multimedia Interactivos', 'SMI'],
+      ['Informática Móvil', 'IM'],
+      ['Pruebas y Despliegue de Software', 'PDS'],
+      ['Inteligencia Ambiental', 'IAMB'],
+    ];
+
+    for (const tit of ['giitt', 'giisof']) {
+      const ano3 = tit === 'giisof' ? ano3Giisof : ano3Giitt;
+      const optativas = tit === 'giisof' ? optativasGiisof : optativasGiitt;
+
       for (const [nombre, codigo] of ano1) {
         insertAsignatura.run(nombre, codigo, 6, tit, '1');
       }
@@ -274,8 +296,11 @@ function poblarDatosIniciales() {
       for (const [nombre, codigo] of ano3) {
         insertAsignatura.run(nombre, codigo, 6, tit, '3');
       }
-      for (const [nombre, codigo, creditos] of ano4.map(([n, c]) => [n, c, c === 'TFG' ? 12 : 6])) {
-        insertAsignatura.run(nombre, codigo, creditos, tit, '4');
+      for (const [nombre, codigo] of ano4Cores) {
+        insertAsignatura.run(nombre, codigo, 6, tit, '4');
+      }
+      for (const [nombre, codigo] of optativas) {
+        insertAsignatura.run(nombre, codigo, 6, tit, '4');
       }
     }
   });
@@ -285,8 +310,6 @@ function poblarDatosIniciales() {
 }
 
 poblarDatosIniciales();
-
-// ─── Usuario admin por defecto ───────────────────────────────────────────────
 
 function seedAdmin() {
   const bcrypt = require('bcrypt');

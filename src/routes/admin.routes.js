@@ -23,12 +23,10 @@ router.post('/vaciar', auth, isAdmin, (req, res) => {
         DELETE FROM grupos;
         DELETE FROM horarios;
       `);
-      // Borrar todos los usuarios excepto el administrador principal
       db.prepare(
         "DELETE FROM usuarios WHERE correo != 'uo271160@uniovi.es'"
       ).run();
-      // Desactivar todas las asignaturas del catálogo (creada = 0)
-      // para que el admin las vuelva a activar manualmente
+      // Desactivadas (no borradas) para que el admin las reactive manualmente.
       db.prepare("UPDATE catalogo_asignaturas SET creada = 0").run();
     });
 
@@ -42,7 +40,6 @@ router.post('/vaciar', auth, isAdmin, (req, res) => {
 
 router.post('/reseed', auth, isAdmin, (req, res) => {
   try {
-    // Bloquear si hay grupos activos (hay datos que dependen del catálogo)
     const { cnt } = db.prepare('SELECT COUNT(*) as cnt FROM grupos').get();
     if (cnt > 0) {
       return res.status(400).json({
@@ -50,11 +47,10 @@ router.post('/reseed', auth, isAdmin, (req, res) => {
       });
     }
 
-    // Borrar en orden (catalogo_asignaturas referencia titulaciones)
+    // Orden importa: catalogo_asignaturas tiene FK a titulaciones.
     db.prepare('DELETE FROM catalogo_asignaturas').run();
     db.prepare('DELETE FROM titulaciones').run();
 
-    // Reinsertar titulaciones + catálogo completo
     poblarDatosIniciales();
 
     return res.json({ mensaje: 'Catálogo y titulaciones restaurados correctamente' });

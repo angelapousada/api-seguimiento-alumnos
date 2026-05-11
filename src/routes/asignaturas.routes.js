@@ -5,10 +5,6 @@ const isAdmin = require('../middlewares/isAdmin');
 
 const router = express.Router();
 
-// GET /api/asignaturas - lista asignaturas activas (creada=1)
-// Admin (rol=0) ve todas. Profesor (rol=1) ve solo:
-//  - asignaturas asociadas a su perfil (usuarios.ids_asignatura)
-//  - asignaturas que tengan algún grupo sin profesor asignado (RF4.2)
 router.get('/', auth, (req, res) => {
   try {
     if (req.user.rol === 0) {
@@ -58,7 +54,6 @@ router.get('/', auth, (req, res) => {
   }
 });
 
-// GET /api/asignaturas/titulaciones - lista todas las titulaciones
 router.get('/titulaciones', auth, (req, res) => {
   try {
     const titulaciones = db.prepare('SELECT * FROM titulaciones').all();
@@ -69,12 +64,11 @@ router.get('/titulaciones', auth, (req, res) => {
   }
 });
 
-// GET /api/asignaturas/catalogo - catálogo no activo con filtros opcionales
 router.get('/catalogo', auth, (req, res) => {
   const { id_titulacion, curso } = req.query;
 
   try {
-    let query = 'SELECT * FROM catalogo_asignaturas WHERE creada = 0';
+    let query = 'SELECT * FROM catalogo_asignaturas WHERE 1 = 1';
     const params = [];
 
     if (id_titulacion) {
@@ -95,7 +89,6 @@ router.get('/catalogo', auth, (req, res) => {
   }
 });
 
-// GET /api/asignaturas/:id - obtener asignatura por ID
 router.get('/:id', auth, (req, res) => {
   try {
     const asignatura = db.prepare('SELECT * FROM catalogo_asignaturas WHERE id = ?').get(req.params.id);
@@ -109,7 +102,42 @@ router.get('/:id', auth, (req, res) => {
   }
 });
 
-// PUT /api/asignaturas/:id - actualizar fechas u otros campos editables
+// Devuelve los profesores que imparten una asignatura concreta.
+// Accesible a cualquier usuario autenticado (admin o profesor)
+// porque se necesita para poblar el dropdown al crear grupos/sesiones.
+// Solo expone datos públicos: id, nombre, apellidos.
+router.get('/:id/profesores', auth, (req, res) => {
+  try {
+    const idAsignatura = String(req.params.id);
+    const profesores = db
+      .prepare("SELECT id, nombre, apellidos, ids_asignatura FROM usuarios WHERE rol = 1")
+      .all();
+
+    const resultado = [];
+    for (const p of profesores) {
+      let ids = [];
+      try {
+        ids = JSON.parse(p.ids_asignatura || '[]');
+      } catch (_) {
+        ids = [];
+      }
+      if (ids.map(String).includes(idAsignatura)) {
+        resultado.push({
+          id: p.id,
+          nombre: p.nombre,
+          apellidos: p.apellidos,
+        });
+      }
+    }
+    return res.json(resultado);
+  } catch (err) {
+    console.error(err);
+    return res
+      .status(500)
+      .json({ error: 'Error al obtener profesores de la asignatura' });
+  }
+});
+
 router.put('/:id', auth, (req, res) => {
   const { fecha_inicio, fecha_fin } = req.body;
   try {
@@ -130,7 +158,6 @@ router.put('/:id', auth, (req, res) => {
   }
 });
 
-// POST /api/asignaturas/activar/:id - activar asignatura
 router.post('/activar/:id', auth, isAdmin, (req, res) => {
   try {
     const result = db.prepare('UPDATE catalogo_asignaturas SET creada = 1 WHERE id = ?').run(req.params.id);
@@ -145,7 +172,6 @@ router.post('/activar/:id', auth, isAdmin, (req, res) => {
   }
 });
 
-// POST /api/asignaturas/desactivar/:id - desactivar asignatura
 router.post('/desactivar/:id', auth, isAdmin, (req, res) => {
   try {
     const result = db.prepare('UPDATE catalogo_asignaturas SET creada = 0 WHERE id = ?').run(req.params.id);
@@ -160,7 +186,6 @@ router.post('/desactivar/:id', auth, isAdmin, (req, res) => {
   }
 });
 
-// POST /api/asignaturas/guardar-carga - guardar asignatura cargada desde SIES con estudiantes
 router.post('/guardar-carga', auth, (req, res) => {
   const { nombre, curso, titulacion, estudiantes, fecha_inicio, fecha_fin } = req.body;
 

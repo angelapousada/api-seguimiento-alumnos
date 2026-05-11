@@ -4,10 +4,6 @@ const auth = require('../middlewares/auth');
 
 const router = express.Router();
 
-// GET /api/estudiantes/buscar?q=texto[&id_asignatura=X&excluir_grupo=Y]
-// Si se pasa id_asignatura, devuelve además id_estudiante_asignatura y filtra
-// solo a estudiantes matriculados en esa asignatura. Si además se pasa
-// excluir_grupo, omite los que ya están en ese grupo.
 router.get('/buscar', auth, (req, res) => {
   const { q, id_asignatura, excluir_grupo } = req.query;
 
@@ -60,7 +56,6 @@ router.get('/buscar', auth, (req, res) => {
   }
 });
 
-// GET /api/estudiantes/:id - obtener datos personales del estudiante
 router.get('/:id', auth, (req, res) => {
   try {
     const estudiante = db.prepare('SELECT * FROM estudiantes WHERE id = ?').get(req.params.id);
@@ -95,24 +90,50 @@ router.get('/:id', auth, (req, res) => {
   }
 });
 
-// POST /api/estudiantes - crear nuevo estudiante manualmente
 router.post('/', auth, (req, res) => {
-  const { dni, nombre, correo, movilidad } = req.body;
+  const { dni, nombre, correo, movilidad, id_grupo } = req.body;
 
   if (!nombre) {
     return res.status(400).json({ error: 'nombre es obligatorio' });
   }
 
   try {
-    const result = db.prepare(`
-      INSERT INTO estudiantes (dni, nombre, correo, movilidad)
-      VALUES (?, ?, ?, ?)
-    `).run(dni || null, nombre, correo || null, movilidad || 'No');
+    const crear = db.transaction(() => {
+      const result = db.prepare(`
+        INSERT INTO estudiantes (dni, nombre, correo, movilidad)
+        VALUES (?, ?, ?, ?)
+      `).run(dni || null, nombre, correo || null, movilidad || 'No');
 
-    const nuevo = db.prepare('SELECT * FROM estudiantes WHERE id = ?').get(result.lastInsertRowid);
+      const idEstudiante = result.lastInsertRowid;
+
+      if (id_grupo) {
+        const grupo = db.prepare('SELECT id, id_asignatura FROM grupos WHERE id = ?').get(id_grupo);
+        if (!grupo) {
+          throw Object.assign(new Error('Grupo no encontrado'), { status: 404 });
+        }
+
+        const ea = db.prepare(`
+          INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula)
+          VALUES (?, ?, 'Si')
+        `).run(idEstudiante, grupo.id_asignatura);
+
+        db.prepare(`
+          INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo)
+          VALUES (?, ?)
+        `).run(ea.lastInsertRowid, id_grupo);
+      }
+
+      return idEstudiante;
+    });
+
+    const idEstudiante = crear();
+    const nuevo = db.prepare('SELECT * FROM estudiantes WHERE id = ?').get(idEstudiante);
     return res.status(201).json(nuevo);
   } catch (err) {
     console.error(err);
+    if (err.status === 404) {
+      return res.status(404).json({ error: err.message });
+    }
     if (err.message && err.message.includes('UNIQUE')) {
       return res.status(409).json({ error: 'El DNI o correo ya existe' });
     }
@@ -120,7 +141,6 @@ router.post('/', auth, (req, res) => {
   }
 });
 
-// PUT /api/estudiantes/:id - actualizar estudiante
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
   const { nombre, correo, movilidad, ruta_imagen } = req.body;
@@ -151,7 +171,6 @@ router.put('/:id', auth, (req, res) => {
   }
 });
 
-// GET /api/estudiantes/:id/estadisticas - obtener estadísticas del estudiante
 router.get('/:id/estadisticas', auth, (req, res) => {
   const { id } = req.params;
   const { id_asignatura } = req.query;
@@ -297,7 +316,6 @@ router.get('/:id/estadisticas', auth, (req, res) => {
   }
 });
 
-// POST /api/estudiantes/:id/cambiar-grupo - cambiar estudiante de grupo
 router.post('/:id/cambiar-grupo', auth, (req, res) => {
   const { id } = req.params;
   const { id_estudiante_asignatura, id_grupo_nuevo } = req.body;
@@ -331,14 +349,28 @@ router.post('/:id/cambiar-grupo', auth, (req, res) => {
       return res.status(400).json({ error: 'El estudiante ya está en ese grupo' });
     }
 
+    // Si el alumno ya está en algún grupo del mismo tipo, hacemos UPDATE
+    // para preservar el id del EAG (y por tanto las asistencias asociadas).
+    // Si no, INSERT.
     const cambiar = db.transaction(() => {
-      const actual = db.prepare('SELECT * FROM estudiantes_asignatura_grupo WHERE id_estudiante_asignatura = ? AND id_grupo = (SELECT id FROM grupos WHERE id = ? AND id_asignatura = ?)').get(id_estudiante_asignatura, grupo.id, ea.id_asignatura);
+      const existente = db.prepare(`
+        SELECT eag.id
+        FROM estudiantes_asignatura_grupo eag
+        JOIN grupos g ON g.id = eag.id_grupo
+        WHERE eag.id_estudiante_asignatura = ?
+          AND g.id_asignatura = ?
+          AND g.tipo = ?
+      `).get(id_estudiante_asignatura, ea.id_asignatura, grupo.tipo);
 
-      if (actual) {
-        db.prepare('DELETE FROM estudiantes_asignatura_grupo WHERE id = ?').run(actual.id);
+      if (existente) {
+        db.prepare(
+          'UPDATE estudiantes_asignatura_grupo SET id_grupo = ? WHERE id = ?'
+        ).run(id_grupo_nuevo, existente.id);
+      } else {
+        db.prepare(
+          'INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo) VALUES (?, ?)'
+        ).run(id_estudiante_asignatura, id_grupo_nuevo);
       }
-
-      db.prepare('INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo) VALUES (?, ?)').run(id_estudiante_asignatura, id_grupo_nuevo);
     });
 
     cambiar();
@@ -360,8 +392,6 @@ router.post('/:id/cambiar-grupo', auth, (req, res) => {
   }
 });
 
-// PUT /api/estudiantes/:id/matricula - actualizar el campo matricula (Si/No)
-// para una asignatura concreta. Permite anular o reactivar matrícula.
 router.put('/:id/matricula', auth, (req, res) => {
   const { id } = req.params;
   const { id_asignatura, matricula } = req.body;
@@ -395,7 +425,6 @@ router.put('/:id/matricula', auth, (req, res) => {
   }
 });
 
-// GET /api/estudiantes/:id/grupos - obtener grupos del estudiante
 router.get('/:id/grupos', auth, (req, res) => {
   const { id } = req.params;
 

@@ -11,7 +11,6 @@ if (!process.env.JWT_SECRET) {
   process.exit(1);
 }
 
-// Inicializar DB (crea tablas y datos iniciales al importar)
 require('./config/db');
 
 const authRoutes = require('./routes/auth.routes');
@@ -27,13 +26,11 @@ const adminRoutes = require('./routes/admin.routes');
 
 const app = express();
 
-// ─── Middlewares globales ────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// ─── Rutas ───────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/asignaturas', asignaturasRoutes);
@@ -45,12 +42,10 @@ app.use('/api/estudiantes', estudiantesRoutes);
 app.use('/api/carga', cargaRoutes);
 app.use('/api/admin', adminRoutes);
 
-// ─── Ruta raíz de comprobación ───────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({ mensaje: 'API Seguimiento Alumnos funcionando correctamente' });
 });
 
-// ─── Middleware de error genérico ────────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error('[ERROR]', err.stack || err.message);
@@ -59,7 +54,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ─── Arrancar servidor HTTPS ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 const SSL_KEY = process.env.SSL_KEY;
 const SSL_CERT = process.env.SSL_CERT;
@@ -73,7 +67,6 @@ if (SSL_KEY && SSL_CERT) {
     console.log(`Servidor HTTPS escuchando en https://localhost:${PORT}`);
   });
 } else {
-  // Fallback HTTP para entornos sin certificado configurado
   app.listen(PORT, () => {
     console.log(`Servidor HTTP escuchando en http://localhost:${PORT}`);
   });
