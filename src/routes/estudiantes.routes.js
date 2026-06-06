@@ -91,7 +91,16 @@ router.get('/:id', auth, (req, res) => {
 });
 
 router.post('/', auth, (req, res) => {
-  const { dni, nombre, correo, movilidad, id_grupo } = req.body;
+  const {
+    dni,
+    nombre,
+    correo,
+    movilidad,
+    id_grupo,
+    convocatorias,
+    matriculas,
+    matricula,
+  } = req.body;
 
   if (!nombre) {
     return res.status(400).json({ error: 'nombre es obligatorio' });
@@ -112,10 +121,24 @@ router.post('/', auth, (req, res) => {
           throw Object.assign(new Error('Grupo no encontrado'), { status: 404 });
         }
 
+        const convocatoriasInt = Number.isInteger(parseInt(convocatorias, 10))
+          ? parseInt(convocatorias, 10)
+          : 0;
+        const matriculasInt = Number.isInteger(parseInt(matriculas, 10))
+          ? parseInt(matriculas, 10)
+          : 0;
+        const matriculaStr = matricula === 'No' ? 'No' : 'Si';
+
         const ea = db.prepare(`
-          INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula)
-          VALUES (?, ?, 'Si')
-        `).run(idEstudiante, grupo.id_asignatura);
+          INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula, convocatorias, matriculas)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(
+          idEstudiante,
+          grupo.id_asignatura,
+          matriculaStr,
+          convocatoriasInt,
+          matriculasInt,
+        );
 
         db.prepare(`
           INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo)

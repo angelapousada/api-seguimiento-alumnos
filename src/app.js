@@ -23,6 +23,7 @@ const examenesRoutes = require('./routes/examenes.routes');
 const estudiantesRoutes = require('./routes/estudiantes.routes');
 const cargaRoutes = require('./routes/carga.routes');
 const adminRoutes = require('./routes/admin.routes');
+const exportarRoutes = require('./routes/exportar.routes');
 
 const app = express();
 
@@ -35,6 +36,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/asignaturas', asignaturasRoutes);
 app.use('/api/asignaturas', asignaturasDetallesRoutes);
+app.use('/api/asignaturas', exportarRoutes);
 app.use('/api/grupos', gruposRoutes);
 app.use('/api/sesiones', sesionesRoutes);
 app.use('/api/examenes', examenesRoutes);
