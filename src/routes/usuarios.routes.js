@@ -213,29 +213,35 @@ router.delete('/:id', auth, isAdmin, (req, res) => {
   try {
     const usuario = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
     if (!usuario) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
+      return res.status(404).json({ codigo: 'usuario_no_encontrado', error: 'Usuario no encontrado' });
     }
 
     if (usuario.rol !== 1) {
-      return res.status(400).json({ error: 'Solo se pueden eliminar cuentas de profesor' });
+      return res.status(400).json({ codigo: 'solo_profesores', error: 'Solo se pueden eliminar cuentas de profesor' });
     }
 
-    const tieneValoraciones = db.prepare(`
-      SELECT COUNT(*) as cnt FROM sesiones WHERE id_profesor = ?
-    `).get(id);
+    // Al eliminar el profesor NO se borran sus grupos ni sesiones: las claves
+    // foráneas (ON DELETE SET NULL, con foreign_keys = ON) los desvinculan
+    // automáticamente poniendo id_profesor = NULL, conservando alumnos,
+    // asistencias y exámenes. Contamos cuántos quedan sin profesor para informar.
+    const grupos = db
+      .prepare('SELECT COUNT(*) as cnt FROM grupos WHERE id_profesor = ?')
+      .get(id);
+    const sesiones = db
+      .prepare('SELECT COUNT(*) as cnt FROM sesiones WHERE id_profesor = ?')
+      .get(id);
 
-    if (tieneValoraciones.cnt > 0) {
-      return res.status(400).json({
-        error: 'No se puede eliminar el profesor porque tiene sesiones asociadas',
-        sesiones: tieneValoraciones.cnt
-      });
-    }
+    db.prepare('DELETE FROM usuarios WHERE id = ?').run(id);
 
-    const result = db.prepare('DELETE FROM usuarios WHERE id = ?').run(id);
-    return res.json({ mensaje: 'Usuario eliminado correctamente' });
+    return res.json({
+      codigo: 'profesor_eliminado',
+      mensaje: 'Usuario eliminado correctamente',
+      grupos_desvinculados: grupos.cnt,
+      sesiones_desvinculadas: sesiones.cnt,
+    });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Error al eliminar usuario' });
+    return res.status(500).json({ codigo: 'error_eliminar_usuario', error: 'Error al eliminar usuario' });
   }
 });
 
