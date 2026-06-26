@@ -68,6 +68,7 @@ db.exec(`
     nombre TEXT NOT NULL,
     correo TEXT UNIQUE,
     movilidad TEXT DEFAULT 'No',
+    necesidades_especiales TEXT DEFAULT 'No',
     ruta_imagen TEXT DEFAULT 'Sin asignar',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -185,6 +186,7 @@ function ensureColumn(table, column, ddl) {
 ensureColumn('catalogo_asignaturas', 'fecha_inicio', 'TEXT');
 ensureColumn('catalogo_asignaturas', 'fecha_fin', 'TEXT');
 ensureColumn('estudiantes_asignatura', 'evaluacion_diferenciada', "TEXT DEFAULT 'No'");
+ensureColumn('estudiantes', 'necesidades_especiales', "TEXT DEFAULT 'No'");
 ensureColumn('usuarios', 'ruta_imagen', "TEXT DEFAULT 'Sin asignar'");
 
 function poblarDatosIniciales() {

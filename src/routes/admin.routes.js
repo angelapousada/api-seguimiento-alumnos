@@ -26,37 +26,23 @@ router.post('/vaciar', auth, isAdmin, (req, res) => {
       db.prepare(
         "DELETE FROM usuarios WHERE correo != 'uo271160@uniovi.es'"
       ).run();
-      // Desactivadas (no borradas) para que el admin las reactive manualmente.
-      db.prepare("UPDATE catalogo_asignaturas SET creada = 0").run();
+      // El catálogo se restaura por completo tras vaciar (orden: catalogo
+      // tiene FK a titulaciones, así que se borra antes).
+      db.prepare('DELETE FROM catalogo_asignaturas').run();
+      db.prepare('DELETE FROM titulaciones').run();
     });
 
     vaciar();
-    return res.json({ mensaje: 'Base de datos vaciada correctamente' });
+    // Repuebla inmediatamente los grados (titulaciones) y sus asignaturas
+    // predefinidas. Quedan con creada = 0 a la espera de que el admin las active.
+    poblarDatosIniciales();
+
+    return res.json({
+      mensaje: 'Base de datos vaciada y catálogo restaurado correctamente',
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error al vaciar la base de datos' });
-  }
-});
-
-router.post('/reseed', auth, isAdmin, (req, res) => {
-  try {
-    const { cnt } = db.prepare('SELECT COUNT(*) as cnt FROM grupos').get();
-    if (cnt > 0) {
-      return res.status(400).json({
-        error: 'Hay asignaturas activas con grupos. Vacía la base de datos primero.',
-      });
-    }
-
-    // Orden importa: catalogo_asignaturas tiene FK a titulaciones.
-    db.prepare('DELETE FROM catalogo_asignaturas').run();
-    db.prepare('DELETE FROM titulaciones').run();
-
-    poblarDatosIniciales();
-
-    return res.json({ mensaje: 'Catálogo y titulaciones restaurados correctamente' });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Error al restaurar el catálogo' });
   }
 });
 

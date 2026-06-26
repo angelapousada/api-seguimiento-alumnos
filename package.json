@@ -6,6 +6,9 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "bcrypt": "^5.1.1",
     "better-sqlite3": "^11.0.0",

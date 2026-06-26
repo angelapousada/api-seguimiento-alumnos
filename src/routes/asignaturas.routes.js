@@ -102,10 +102,6 @@ router.get('/:id', auth, (req, res) => {
   }
 });
 
-// Devuelve los profesores que imparten una asignatura concreta.
-// Accesible a cualquier usuario autenticado (admin o profesor)
-// porque se necesita para poblar el dropdown al crear grupos/sesiones.
-// Solo expone datos públicos: id, nombre, apellidos.
 router.get('/:id/profesores', auth, (req, res) => {
   try {
     const idAsignatura = String(req.params.id);
@@ -225,9 +221,9 @@ router.post('/guardar-carga', auth, (req, res) => {
 
         if (!estudiante && est.dni) {
           const r = db.prepare(`
-            INSERT INTO estudiantes (dni, nombre, correo, movilidad)
-            VALUES (?, ?, ?, ?)
-          `).run(est.dni, est.nombre, est.correo, est.movilidad || 'No');
+            INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
+            VALUES (?, ?, ?, ?, ?)
+          `).run(est.dni, est.nombre, est.correo, est.movilidad || 'No', est.necesidades_especiales || 'No');
           estudiante = { id: r.lastInsertRowid };
         }
 
@@ -235,9 +231,9 @@ router.post('/guardar-carga', auth, (req, res) => {
           estudiante = db.prepare('SELECT id FROM estudiantes WHERE nombre = ? AND dni IS NULL').get(est.nombre);
           if (!estudiante) {
             const r = db.prepare(`
-              INSERT INTO estudiantes (nombre, correo, movilidad)
-              VALUES (?, ?, ?)
-            `).run(est.nombre, est.correo, est.movilidad || 'No');
+              INSERT INTO estudiantes (nombre, correo, movilidad, necesidades_especiales)
+              VALUES (?, ?, ?, ?)
+            `).run(est.nombre, est.correo, est.movilidad || 'No', est.necesidades_especiales || 'No');
             estudiante = { id: r.lastInsertRowid };
           }
         }
@@ -246,9 +242,9 @@ router.post('/guardar-carga', auth, (req, res) => {
 
         if (!ea) {
           const r = db.prepare(`
-            INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula)
-            VALUES (?, ?, ?)
-          `).run(estudiante.id, asignatura.id, 'Si');
+            INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula, evaluacion_diferenciada)
+            VALUES (?, ?, ?, ?)
+          `).run(estudiante.id, asignatura.id, 'Si', est.evaluacion_diferenciada || 'No');
           ea = { id: r.lastInsertRowid };
         }
       }

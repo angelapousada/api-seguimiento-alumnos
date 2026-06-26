@@ -8,13 +8,12 @@ const router = express.Router();
 /**
  * GET /api/asignaturas/:id/exportar?id_grupo=<opcional>
  *
- * Exporta el seguimiento de los estudiantes de una asignatura (o de un
- * grupo concreto) a un libro Excel con las hojas:
+ * Exportación de seguimiento de una asignatura a un fichero Excel.
  *   - Resumen: una fila por estudiante y grupo con totales y porcentajes.
  *   - Asistencia: una fila por estudiante y sesión.
  *   - Entregas: una fila por entrega registrada.
  *   - Valoraciones: una fila por concepto valorado.
- *   - Examenes: una fila por estudiante y examen.
+ *   - Exámenes: una fila por estudiante y examen.
  */
 router.get('/:id/exportar', auth, (req, res) => {
   const { id } = req.params;
@@ -54,9 +53,12 @@ router.get('/:id/exportar', auth, (req, res) => {
         e.nombre,
         e.dni,
         e.correo,
+        e.movilidad,
+        e.necesidades_especiales,
         ea.matricula,
         ea.convocatorias,
-        ea.matriculas
+        ea.matriculas,
+        ea.evaluacion_diferenciada
       FROM estudiantes_asignatura_grupo eag
       JOIN estudiantes_asignatura ea ON ea.id = eag.id_estudiante_asignatura
       JOIN estudiantes e ON e.id = ea.id_estudiante
@@ -176,6 +178,9 @@ router.get('/:id/exportar', auth, (req, res) => {
           'DNI': est.dni,
           'Correo': est.correo || '',
           'Matrícula': est.matricula,
+          'Movilidad': est.movilidad || 'No',
+          'Evaluación diferenciada': est.evaluacion_diferenciada || 'No',
+          'Necesidades educativas especiales': est.necesidades_especiales || 'No',
           'Sesiones asistidas': sesionesAsistidas,
           'Total sesiones': totalSesiones,
           '% Asistencia': totalSesiones > 0
@@ -200,7 +205,6 @@ router.get('/:id/exportar', auth, (req, res) => {
       const hoja = filas.length > 0
         ? XLSX.utils.json_to_sheet(filas)
         : XLSX.utils.aoa_to_sheet([columnas]);
-      // Anchura de columnas legible.
       const cabeceras = filas.length > 0 ? Object.keys(filas[0]) : columnas;
       hoja['!cols'] = cabeceras.map((c) => ({
         wch: Math.max(c.length + 2, 12),
@@ -210,6 +214,7 @@ router.get('/:id/exportar', auth, (req, res) => {
 
     agregarHoja('Resumen', filasResumen, [
       'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Correo', 'Matrícula',
+      'Movilidad', 'Evaluación diferenciada', 'Necesidades educativas especiales',
       'Sesiones asistidas', 'Total sesiones', '% Asistencia',
       'Entregas realizadas', 'Total entregas', '% Entregas',
       'Exámenes asistidos', 'Total exámenes', 'Valoración media',
@@ -223,7 +228,7 @@ router.get('/:id/exportar', auth, (req, res) => {
     agregarHoja('Valoraciones', filasValoraciones, [
       'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Fecha sesión', 'Concepto', 'Valoración', 'Comentario',
     ]);
-    agregarHoja('Examenes', filasExamenes, [
+    agregarHoja('Exámenes', filasExamenes, [
       'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Examen', 'Fecha', 'Asistencia', 'Comentario',
     ]);
 

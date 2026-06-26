@@ -116,8 +116,6 @@ router.put('/:id', auth, (req, res) => {
     if (ids_asignatura !== undefined) {
       const idsArr = Array.isArray(ids_asignatura) ? ids_asignatura : [];
       idsJSON = JSON.stringify(idsArr);
-      // Derivamos nombres_asignatura desde el catálogo para que siempre
-      // estén sincronizados con la BD (independiente de lo que mande el front).
       if (idsArr.length === 0) {
         nombresJSON = JSON.stringify([]);
       } else {
@@ -220,10 +218,6 @@ router.delete('/:id', auth, isAdmin, (req, res) => {
       return res.status(400).json({ codigo: 'solo_profesores', error: 'Solo se pueden eliminar cuentas de profesor' });
     }
 
-    // Al eliminar el profesor NO se borran sus grupos ni sesiones: las claves
-    // foráneas (ON DELETE SET NULL, con foreign_keys = ON) los desvinculan
-    // automáticamente poniendo id_profesor = NULL, conservando alumnos,
-    // asistencias y exámenes. Contamos cuántos quedan sin profesor para informar.
     const grupos = db
       .prepare('SELECT COUNT(*) as cnt FROM grupos WHERE id_profesor = ?')
       .get(id);

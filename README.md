@@ -69,6 +69,84 @@ La configuración se toma del fichero `.env` (hay una plantilla en `.env.example
 
 ---
 
+## Despliegue en una VM (producción)
+
+Pasos para poner la API en una máquina de la Universidad. Los ficheros de apoyo
+están en `deploy/`.
+
+### 1. Preparar la máquina
+
+```bash
+# Node 18+ y herramientas de compilación (better-sqlite3 es un módulo nativo).
+sudo apt update && sudo apt install -y nodejs npm build-essential python3
+node -v   # comprobar >= 18
+```
+
+### 2. Desplegar el código
+
+```bash
+sudo mkdir -p /opt/api-seguimiento-alumnos
+# copia el proyecto a /opt/api-seguimiento-alumnos (git clone, scp, rsync...)
+sudo useradd -r -s /usr/sbin/nologin seguimiento   # usuario sin privilegios
+sudo chown -R seguimiento:seguimiento /opt/api-seguimiento-alumnos
+cd /opt/api-seguimiento-alumnos
+sudo -u seguimiento npm install --omit=dev
+```
+
+### 3. Configuración (`.env`)
+
+```bash
+cp .env.example .env
+# Edita .env y, como mínimo:
+#  - JWT_SECRET: genera uno nuevo y único:
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+#  - PORT y rutas SSL_KEY / SSL_CERT
+```
+
+### 4. Certificado HTTPS
+
+- **Recomendado:** certificado real (Let's Encrypt o emitido por la UO) si la VM
+  tiene un dominio. Apunta `SSL_KEY`/`SSL_CERT` a esos ficheros.
+- **Alternativa (autofirmado)** para la IP/dominio de la VM:
+
+  ```bash
+  ./deploy/generar-certificado.sh <ip-o-dominio-de-la-vm>
+  ```
+
+### 5. Arranque automático con systemd
+
+```bash
+# Ajusta User / WorkingDirectory / ExecStart en el fichero si cambian.
+sudo cp deploy/api-seguimiento.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now api-seguimiento
+sudo systemctl status api-seguimiento
+journalctl -u api-seguimiento -f      # ver logs
+```
+
+### 6. Red y seguridad
+
+- Abre el **puerto** elegido en el firewall de la VM (interno de la UO, o vía
+  reverse proxy nginx en 443 si se expone a internet).
+- **Cambia la contraseña del admin** (`uo271160@uniovi.es` / `admin123`) tras el
+  primer arranque.
+- Haz **copias de seguridad** periódicas de `data/seguimiento.db` y de
+  `uploads/perfiles/` (son todo el estado de la aplicación).
+
+### 7. App cliente
+
+Compila el APK apuntando al host de la VM (sin editar el código):
+
+```bash
+flutter build apk --release \
+  --dart-define=API_HOST=<ip-o-dominio-de-la-vm> \
+  --dart-define=API_PORT=3000
+```
+
+El host indicado debe coincidir con el del certificado del servidor.
+
+---
+
 ## Endpoints principales
 
 Todas las rutas cuelgan de `/api` y la mayoría requieren un token JWT en la

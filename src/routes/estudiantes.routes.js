@@ -18,9 +18,9 @@ router.get('/buscar', auth, (req, res) => {
       const params = [id_asignatura, termino, termino, termino];
       let sql = `
         SELECT
-          e.id, e.dni, e.nombre, e.correo, e.movilidad, e.ruta_imagen,
+          e.id, e.dni, e.nombre, e.correo, e.movilidad, e.necesidades_especiales, e.ruta_imagen,
           ea.id AS id_estudiante_asignatura,
-          ea.matricula, ea.convocatorias, ea.matriculas
+          ea.matricula, ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
         FROM estudiantes e
         JOIN estudiantes_asignatura ea ON ea.id_estudiante = e.id
         WHERE ea.id_asignatura = ?
@@ -69,6 +69,7 @@ router.get('/:id', auth, (req, res) => {
         ea.convocatorias,
         ea.matriculas,
         ea.matricula,
+        ea.evaluacion_diferenciada,
         ca.id AS id_asignatura,
         ca.nombre AS asignatura,
         ca.curso,
@@ -96,6 +97,8 @@ router.post('/', auth, (req, res) => {
     nombre,
     correo,
     movilidad,
+    necesidades_especiales,
+    evaluacion_diferenciada,
     id_grupo,
     convocatorias,
     matriculas,
@@ -109,9 +112,9 @@ router.post('/', auth, (req, res) => {
   try {
     const crear = db.transaction(() => {
       const result = db.prepare(`
-        INSERT INTO estudiantes (dni, nombre, correo, movilidad)
-        VALUES (?, ?, ?, ?)
-      `).run(dni || null, nombre, correo || null, movilidad || 'No');
+        INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(dni || null, nombre, correo || null, movilidad || 'No', necesidades_especiales || 'No');
 
       const idEstudiante = result.lastInsertRowid;
 
@@ -130,14 +133,15 @@ router.post('/', auth, (req, res) => {
         const matriculaStr = matricula === 'No' ? 'No' : 'Si';
 
         const ea = db.prepare(`
-          INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula, convocatorias, matriculas)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula, convocatorias, matriculas, evaluacion_diferenciada)
+          VALUES (?, ?, ?, ?, ?, ?)
         `).run(
           idEstudiante,
           grupo.id_asignatura,
           matriculaStr,
           convocatoriasInt,
           matriculasInt,
+          evaluacion_diferenciada === 'Si' ? 'Si' : 'No',
         );
 
         db.prepare(`
@@ -166,7 +170,7 @@ router.post('/', auth, (req, res) => {
 
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
-  const { nombre, correo, movilidad, ruta_imagen } = req.body;
+  const { nombre, correo, movilidad, necesidades_especiales, ruta_imagen } = req.body;
 
   try {
     const estudiante = db.prepare('SELECT * FROM estudiantes WHERE id = ?').get(id);
@@ -176,12 +180,13 @@ router.put('/:id', auth, (req, res) => {
 
     db.prepare(`
       UPDATE estudiantes
-      SET nombre = ?, correo = ?, movilidad = ?, ruta_imagen = ?
+      SET nombre = ?, correo = ?, movilidad = ?, necesidades_especiales = ?, ruta_imagen = ?
       WHERE id = ?
     `).run(
       nombre !== undefined ? nombre : estudiante.nombre,
       correo !== undefined ? correo : estudiante.correo,
       movilidad !== undefined ? movilidad : estudiante.movilidad,
+      necesidades_especiales !== undefined ? necesidades_especiales : estudiante.necesidades_especiales,
       ruta_imagen !== undefined ? ruta_imagen : estudiante.ruta_imagen,
       id
     );

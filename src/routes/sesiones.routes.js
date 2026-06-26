@@ -243,7 +243,7 @@ router.get('/:id/buscar-otros-grupos', auth, (req, res) => {
     const resultados = db
       .prepare(
         `SELECT
-           e.id, e.dni, e.nombre, e.correo, e.movilidad, e.ruta_imagen,
+           e.id, e.dni, e.nombre, e.correo, e.movilidad, e.necesidades_especiales, e.ruta_imagen,
            eag.id AS id_estudiante_asignatura_grupo,
            g.nombre AS nombre_grupo_origen
          FROM estudiantes e

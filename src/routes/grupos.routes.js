@@ -110,10 +110,12 @@ router.get('/:id/estudiantes', auth, (req, res) => {
         e.dni,
         e.correo,
         e.movilidad,
+        e.necesidades_especiales,
         e.ruta_imagen,
         ea.convocatorias,
         ea.matriculas,
-        ea.matricula
+        ea.matricula,
+        ea.evaluacion_diferenciada
       FROM estudiantes_asignatura_grupo eag
       JOIN estudiantes_asignatura ea ON ea.id = eag.id_estudiante_asignatura
       JOIN estudiantes e ON e.id = ea.id_estudiante
@@ -253,6 +255,7 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
     const colConvocatorias = findCol(['Convocatorias', 'convocatorias']);
     const colMatriculas = findCol(['Matrículas', 'Matriculas', 'matriculas']);
     const colEvalDif = findCol(['Evaluación diferenciada', 'Evaluacion diferenciada', 'evaluacion_diferenciada']);
+    const colNee = findCol(['Necesidades educativas especiales', 'Necesidades especiales', 'necesidades_especiales', 'NEE']);
     const colGrupo = findCol(nombresColumna);
 
     if (!colGrupo) {
@@ -278,7 +281,7 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
       'SELECT id FROM estudiantes WHERE dni = ? OR (dni IS NULL AND LOWER(correo) = LOWER(?))'
     );
     const insertEstudianteStmt = db.prepare(
-      'INSERT INTO estudiantes (dni, nombre, correo, movilidad) VALUES (?, ?, ?, ?)'
+      'INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales) VALUES (?, ?, ?, ?, ?)'
     );
     const findEAStmt = db.prepare(
       'SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?'
@@ -313,6 +316,7 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
         const convocatorias = colConvocatorias ? parseInt(row[colConvocatorias]) || 0 : 0;
         const matriculas = colMatriculas ? parseInt(row[colMatriculas]) || 0 : 0;
         const evalDif = colEvalDif && norm(row[colEvalDif]).toLowerCase().startsWith('s') ? 'Si' : 'No';
+        const nee = colNee && norm(row[colNee]).toLowerCase().startsWith('s') ? 'Si' : 'No';
 
         if (!dni && !correo && !nombre) {
           resultado.errores.push(`Fila ${i + 2}: vacía`);
@@ -321,7 +325,7 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
 
         let estudiante = findEstudianteStmt.get(dni, correo);
         if (!estudiante) {
-          const r = insertEstudianteStmt.run(dni, nombre, correo, movilidad);
+          const r = insertEstudianteStmt.run(dni, nombre, correo, movilidad, nee);
           estudiante = { id: r.lastInsertRowid };
           resultado.creados++;
         } else {

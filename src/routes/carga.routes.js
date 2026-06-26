@@ -8,6 +8,11 @@ const auth = require('../middlewares/auth');
 
 const router = express.Router();
 
+// Reconoce un valor afirmativo del Excel ("Si", "Sí", "S", "Yes"...) de forma
+// tolerante a tildes y mayúsculas, devolviendo siempre 'Si' o 'No'.
+const aSiNo = (v) =>
+  v != null && String(v).trim().toLowerCase().startsWith('s') ? 'Si' : 'No';
+
 const upload = multer({
   dest: 'uploads/',
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -74,6 +79,7 @@ router.post('/asignaturas', auth, upload.single('archivo'), (req, res) => {
           const nombreCompleto = getCol(row, ['Nombre completo', 'nombre_completo', 'Alumno', 'NOMBRE COMPLEO']);
           const correo = getCol(row, ['Correo', 'correo', 'EMAIL', 'email']);
           const movilidad = getCol(row, ['Movilidad', 'movilidad', 'MOVILIDAD']);
+          const necesidades = getCol(row, ['Necesidades educativas especiales', 'Necesidades especiales', 'necesidades_especiales', 'NEE']);
           const convocatorias = parseInt(getCol(row, ['Convocatorias', 'convocatorias', 'CONVOCATORIAS']) || '0');
           const matriculas = parseInt(getCol(row, ['Matrículas', 'matriculas', 'MATRÍCULAS', 'MATRICULAS']) || '0');
           const matricula = getCol(row, ['Matrícula', 'matricula', 'MATRÍCULA', 'MATRICULA']) === 'Si' ? 'Si' : 'No';
@@ -87,9 +93,9 @@ router.post('/asignaturas', auth, upload.single('archivo'), (req, res) => {
 
           if (!estudiante) {
             const r = db.prepare(`
-              INSERT INTO estudiantes (dni, nombre, correo, movilidad)
-              VALUES (?, ?, ?, ?)
-            `).run(dni || null, nombreCompleto || '', correo || null, movilidad === 'Si' ? 'Si' : 'No');
+              INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
+              VALUES (?, ?, ?, ?, ?)
+            `).run(dni || null, nombreCompleto || '', correo || null, aSiNo(movilidad), aSiNo(necesidades));
             estudiante = { id: r.lastInsertRowid };
             resultado.creados++;
           }
@@ -154,14 +160,18 @@ router.post('/asignaturas-simple', auth, upload.single('archivo'), (req, res) =>
       const dni = getCol(r, ['DNI', 'dni', 'NIF'])?.toString().trim();
       const nombreCompleto = getCol(r, ['Nombre completo', 'nombre_completo', 'Alumno', 'NOMBRE COMPLEO']);
       const correo = getCol(r, ['Correo', 'correo', 'EMAIL', 'email']);
-      const movilidad = getCol(r, ['Movilidad', 'movilidad']) === 'Si' ? 'Si' : 'No';
+      const movilidad = aSiNo(getCol(r, ['Movilidad', 'movilidad']));
+      const necesidades_especiales = aSiNo(getCol(r, ['Necesidades educativas especiales', 'Necesidades especiales', 'necesidades_especiales', 'NEE']));
+      const evaluacion_diferenciada = aSiNo(getCol(r, ['Evaluación diferenciada', 'Evaluacion diferenciada', 'evaluacion_diferenciada']));
 
       if (dni || nombreCompleto) {
         estudiantes.push({
           dni: dni || null,
           nombre: nombreCompleto || 'Sin nombre',
           correo: correo || null,
-          movilidad
+          movilidad,
+          necesidades_especiales,
+          evaluacion_diferenciada
         });
       }
     }
