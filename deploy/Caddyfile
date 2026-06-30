@@ -1,0 +1,63 @@
+# Caddyfile — proxy inverso para "Seguimiento de Alumnos" (despliegue interno UO)
+#
+# La máquina es de uso interno (red de la Universidad / VPN), NO accesible desde
+# Internet, por lo que NO se usa Let's Encrypt (su validación automática exige
+# que el servidor sea alcanzable desde Internet por el puerto 80). En su lugar,
+# Caddy termina TLS en el 443 con un certificado autofirmado (o uno emitido por
+# la UO) para la dirección del servidor. Bajo esa única dirección sirve:
+#   - /api/*      y /uploads/*  → la API Node (HTTP plano en 127.0.0.1:3000)
+#   - el resto                  → la app web Flutter (SPA) compilada en disco
+#
+# Requisitos previos:
+#   1) La API corriendo en 127.0.0.1:3000 (servicio systemd, en HTTP, con
+#      HOST=127.0.0.1 y SIN SSL_KEY/SSL_CERT en su .env).
+#   2) La web Flutter compilada y copiada al directorio 'root' de abajo.
+#   3) El certificado y su clave copiados a /etc/caddy/certs/ y legibles por Caddy.
+#
+# Instalación de Caddy (Debian/Ubuntu):
+#   sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+#   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+#   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+#   sudo apt update && sudo apt install caddy
+#
+# Uso:
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   # sustituye la dirección del bloque por la IP (o el dominio interno) real
+#   sudo systemctl restart caddy
+#   journalctl -u caddy -f
+
+# Caddy escucha SOLO en el 443; no toca el 80 (en la VM lo usa Apache). Esto
+# evita el conflicto de puertos y, al ser interno, la redirección HTTP no hace falta.
+{
+	auto_https disable_redirects
+}
+
+# Sustituye 156.35.163.96 por la IP real o, cuando se asigne, el dominio interno.
+156.35.163.96 {
+	# Certificado propio (autofirmado o emitido por la UO). Sin Let's Encrypt.
+	tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+
+	# Compresión de respuestas.
+	encode gzip zstd
+
+	# La API y los archivos subidos (imágenes de perfil) los atiende Node.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:3000
+	}
+	handle /uploads/* {
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	# Todo lo demás es la app web Flutter. Al ser una SPA, las rutas que no
+	# correspondan a un fichero real se redirigen a index.html.
+	handle {
+		root * /opt/app-seguimiento-web
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Registro de accesos (opcional).
+	log {
+		output file /var/log/caddy/seguimiento.log
+	}
+}

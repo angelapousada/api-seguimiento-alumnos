@@ -6,12 +6,9 @@ const fs = require('fs');
 const db = require('../config/db');
 const auth = require('../middlewares/auth');
 
-const router = express.Router();
+const { aSiNo, parseMatriculados } = require('../utils/cargaExcel');
 
-// Reconoce un valor afirmativo del Excel ("Si", "Sí", "S", "Yes"...) de forma
-// tolerante a tildes y mayúsculas, devolviendo siempre 'Si' o 'No'.
-const aSiNo = (v) =>
-  v != null && String(v).trim().toLowerCase().startsWith('s') ? 'Si' : 'No';
+const router = express.Router();
 
 const upload = multer({
   dest: 'uploads/',
@@ -46,76 +43,57 @@ router.post('/asignaturas', auth, upload.single('archivo'), (req, res) => {
   }
 
   try {
-    const workbook = xlsx.readFile(req.file.path);
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const datos = xlsx.utils.sheet_to_json(sheet);
+    const parsed = parseMatriculados(req.file.path);
+    fs.unlinkSync(req.file.path);
 
-    if (datos.length === 0) {
-      fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'El archivo está vacío' });
+    if (parsed.estudiantes.length === 0) {
+      return res.status(400).json({ error: 'No se encontraron estudiantes en el archivo' });
     }
 
-    const resultado = {
-      creados: 0,
-      actualizados: 0,
-      errores: []
-    };
+    const resultado = { creados: 0, actualizados: 0, errores: [] };
+
+    const buscarStmt = db.prepare(
+      'SELECT id FROM estudiantes WHERE dni = ? OR (dni IS NULL AND nombre = ?)'
+    );
+    const insertarStmt = db.prepare(`
+      INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const actualizarStmt = db.prepare(`
+      UPDATE estudiantes
+      SET nombre = ?, correo = COALESCE(?, correo), movilidad = ?, necesidades_especiales = ?
+      WHERE id = ?
+    `);
 
     const insertar = db.transaction(() => {
-      const cols = Object.keys(datos[0]);
-      const getCol = (row, names) => {
-        for (const n of names) {
-          if (cols.includes(n)) return row[n];
-        }
-        return null;
-      };
-
-      for (let i = 0; i < datos.length; i++) {
+      parsed.estudiantes.forEach((est, i) => {
         try {
-          const row = datos[i];
-          const nombre = getCol(row, ['Nombre', 'nombre', 'Asignatura', 'asignatura', 'NOMBRE']);
-          const dni = getCol(row, ['DNI', 'dni', 'NIF']);
-          const nombreCompleto = getCol(row, ['Nombre completo', 'nombre_completo', 'Alumno', 'NOMBRE COMPLEO']);
-          const correo = getCol(row, ['Correo', 'correo', 'EMAIL', 'email']);
-          const movilidad = getCol(row, ['Movilidad', 'movilidad', 'MOVILIDAD']);
-          const necesidades = getCol(row, ['Necesidades educativas especiales', 'Necesidades especiales', 'necesidades_especiales', 'NEE']);
-          const convocatorias = parseInt(getCol(row, ['Convocatorias', 'convocatorias', 'CONVOCATORIAS']) || '0');
-          const matriculas = parseInt(getCol(row, ['Matrículas', 'matriculas', 'MATRÍCULAS', 'MATRICULAS']) || '0');
-          const matricula = getCol(row, ['Matrícula', 'matricula', 'MATRÍCULA', 'MATRICULA']) === 'Si' ? 'Si' : 'No';
-
-          if (!dni && !nombreCompleto) {
-            resultado.errores.push(`Fila ${i + 2}: Falta DNI o nombre`);
-            continue;
-          }
-
-          let estudiante = db.prepare('SELECT id FROM estudiantes WHERE dni = ? OR (dni IS NULL AND nombre = ?)').get(dni || null, nombreCompleto || null);
-
+          const estudiante = buscarStmt.get(est.dni || null, est.nombre || null);
           if (!estudiante) {
-            const r = db.prepare(`
-              INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
-              VALUES (?, ?, ?, ?, ?)
-            `).run(dni || null, nombreCompleto || '', correo || null, aSiNo(movilidad), aSiNo(necesidades));
-            estudiante = { id: r.lastInsertRowid };
+            insertarStmt.run(
+              est.dni || null, est.nombre || '', est.correo || null,
+              est.movilidad, est.necesidades_especiales
+            );
             resultado.creados++;
+          } else {
+            actualizarStmt.run(
+              est.nombre || '', est.correo || null,
+              est.movilidad, est.necesidades_especiales, estudiante.id
+            );
+            resultado.actualizados++;
           }
-
         } catch (err) {
           resultado.errores.push(`Fila ${i + 2}: ${err.message}`);
         }
-      }
+      });
     });
 
     insertar();
-    fs.unlinkSync(req.file.path);
 
-    return res.json({
-      mensaje: 'Archivo procesado correctamente',
-      resultado
-    });
+    return res.json({ mensaje: 'Archivo procesado correctamente', resultado });
   } catch (err) {
     console.error(err);
-    if (req.file && req.file.path) fs.unlinkSync(req.file.path);
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     return res.status(500).json({ error: 'Error al procesar el archivo' });
   }
 });
@@ -126,67 +104,22 @@ router.post('/asignaturas-simple', auth, upload.single('archivo'), (req, res) =>
   }
 
   try {
-    const workbook = xlsx.readFile(req.file.path);
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const datos = xlsx.utils.sheet_to_json(sheet);
-
-    if (datos.length === 0) {
-      fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'El archivo está vacío' });
-    }
-
-    const cols = Object.keys(datos[0]);
-    const getCol = (row, names) => {
-      for (const n of names) {
-        if (cols.includes(n)) return row[n];
-      }
-      return null;
-    };
-
-    const row = datos[0];
-    const nombre = getCol(row, ['Nombre', 'nombre', 'Asignatura', 'NOMBRE']);
-    const curso = getCol(row, ['Curso', 'curso', 'CURSO']);
-    const titulacion = getCol(row, ['Titulación', 'titulacion', 'TITULACIÓN', 'Titulacion']);
-
-    if (!nombre) {
-      fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'No se encontró el nombre de la asignatura' });
-    }
-
-    const estudiantes = [];
-    for (let i = 0; i < datos.length; i++) {
-      const r = datos[i];
-      const dni = getCol(r, ['DNI', 'dni', 'NIF'])?.toString().trim();
-      const nombreCompleto = getCol(r, ['Nombre completo', 'nombre_completo', 'Alumno', 'NOMBRE COMPLEO']);
-      const correo = getCol(r, ['Correo', 'correo', 'EMAIL', 'email']);
-      const movilidad = aSiNo(getCol(r, ['Movilidad', 'movilidad']));
-      const necesidades_especiales = aSiNo(getCol(r, ['Necesidades educativas especiales', 'Necesidades especiales', 'necesidades_especiales', 'NEE']));
-      const evaluacion_diferenciada = aSiNo(getCol(r, ['Evaluación diferenciada', 'Evaluacion diferenciada', 'evaluacion_diferenciada']));
-
-      if (dni || nombreCompleto) {
-        estudiantes.push({
-          dni: dni || null,
-          nombre: nombreCompleto || 'Sin nombre',
-          correo: correo || null,
-          movilidad,
-          necesidades_especiales,
-          evaluacion_diferenciada
-        });
-      }
-    }
-
+    const parsed = parseMatriculados(req.file.path);
     fs.unlinkSync(req.file.path);
 
-    return res.json({
-      nombre,
-      curso: curso || '',
-      titulacion: titulacion || '',
-      estudiantes
-    });
+    if (parsed.estudiantes.length === 0) {
+      return res.status(400).json({ error: 'No se encontraron estudiantes en el archivo' });
+    }
+    if (!parsed.nombre) {
+      return res.status(400).json({
+        error: 'No se encontró el nombre de la asignatura (etiqueta "Asignatura:")',
+      });
+    }
+
+    return res.json(parsed);
   } catch (err) {
     console.error(err);
-    if (req.file && req.file.path) fs.unlinkSync(req.file.path);
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     return res.status(500).json({ error: 'Error al procesar el archivo' });
   }
 });
@@ -294,6 +227,272 @@ router.post('/imagenes-archivos', auth, uploadPerfiles.array('imagenes', 200), (
     mensaje: 'Imágenes procesadas',
     ...resultado,
   });
+});
+
+const nombreGrupoDeHoja = (sheet) => {
+  const s = String(sheet).trim();
+  let m = s.match(/^PLI\s*(\d+)$/i);
+  if (m) return `English ${String(parseInt(m[1])).padStart(2, '0')}`;
+  m = s.match(/^PL\s*(\d+)$/i);
+  if (m) return String(parseInt(m[1])).padStart(2, '0');
+  return null;
+};
+
+router.post('/grupos-mtp', auth, upload.single('archivo'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Archivo no proporcionado' });
+  const idAsignatura = req.body.id_asignatura;
+  if (!idAsignatura) {
+    fs.unlinkSync(req.file.path);
+    return res.status(400).json({ error: 'Falta id_asignatura' });
+  }
+  const idProfesor = req.user.id;
+
+  try {
+    const workbook = xlsx.readFile(req.file.path);
+    const norm = (v) => String(v == null ? '' : v).trim();
+    const resultado = {
+      grupos_creados: 0,
+      grupos_existentes: 0,
+      alumnos_creados: 0,
+      alumnos_asignados: 0,
+      alumnos_ya_estaban: 0,
+      hojas_ignoradas: [],
+    };
+
+    const buscarGrupo = db.prepare('SELECT id FROM grupos WHERE id_asignatura = ? AND tipo = ? AND nombre = ?');
+    const insertGrupo = db.prepare('INSERT INTO grupos (nombre, tipo, id_asignatura, id_profesor, aula) VALUES (?, ?, ?, ?, NULL)');
+    const buscarEst = db.prepare('SELECT id FROM estudiantes WHERE dni = ?');
+    const insertEst = db.prepare('INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales) VALUES (?, ?, ?, ?, ?)');
+    const buscarEA = db.prepare('SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?');
+    const insertEA = db.prepare("INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, convocatorias, matriculas, matricula, evaluacion_diferenciada) VALUES (?, ?, ?, ?, 'Si', ?)");
+    const buscarEAG = db.prepare('SELECT id FROM estudiantes_asignatura_grupo WHERE id_estudiante_asignatura = ? AND id_grupo = ?');
+    const insertEAG = db.prepare('INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo) VALUES (?, ?)');
+
+    const idGrupo = (tipo, nombre) => {
+      if (!nombre) return null;
+      let g = buscarGrupo.get(idAsignatura, tipo, nombre);
+      if (!g) {
+        const r = insertGrupo.run(nombre, tipo, idAsignatura, idProfesor);
+        g = { id: r.lastInsertRowid };
+        resultado.grupos_creados++;
+      }
+      return g.id;
+    };
+    const asignar = (eaId, gId) => {
+      if (!gId) return;
+      if (buscarEAG.get(eaId, gId)) resultado.alumnos_ya_estaban++;
+      else { insertEAG.run(eaId, gId); resultado.alumnos_asignados++; }
+    };
+
+    const esWorkbookMTP = workbook.SheetNames.some((sn) => /^PLI?\s*\d+$/i.test(String(sn).trim()));
+
+    const procesar = db.transaction(() => {
+      db.prepare('UPDATE catalogo_asignaturas SET creada = 1 WHERE id = ?').run(idAsignatura);
+
+      if (esWorkbookMTP) {
+        for (const sn of workbook.SheetNames) {
+          const nombreGrupo = nombreGrupoDeHoja(sn);
+          if (!nombreGrupo) { resultado.hojas_ignoradas.push(sn); continue; }
+          const gId = idGrupo('Laboratorio', nombreGrupo);
+          const filas = xlsx.utils.sheet_to_json(workbook.Sheets[sn], { header: 1, raw: false, defval: '' });
+          const idxCab = filas.findIndex((f) => norm(f[0]).toUpperCase() === 'DNI');
+          if (idxCab < 0) continue;
+          for (let r = idxCab + 1; r < filas.length; r++) {
+            const dni = norm(filas[r][0]);
+            if (!dni) continue;
+            let est = buscarEst.get(dni);
+            if (!est) {
+              const ins = insertEst.run(dni, norm(filas[r][1]), null, 'No', 'No');
+              est = { id: ins.lastInsertRowid };
+              resultado.alumnos_creados++;
+            }
+            let ea = buscarEA.get(est.id, idAsignatura);
+            if (!ea) { const ins = insertEA.run(est.id, idAsignatura, 0, 0, 'No'); ea = { id: ins.lastInsertRowid }; }
+            asignar(ea.id, gId);
+          }
+        }
+      } else {
+        const parsed = parseMatriculados(req.file.path);
+        for (const e of parsed.estudiantes) {
+          if (!e.dni && !e.nombre) continue;
+          let est = e.dni ? buscarEst.get(e.dni) : null;
+          if (!est) {
+            const ins = insertEst.run(e.dni || null, e.nombre || '', e.correo || null, e.movilidad || 'No', e.necesidades_especiales || 'No');
+            est = { id: ins.lastInsertRowid };
+            resultado.alumnos_creados++;
+          }
+          let ea = buscarEA.get(est.id, idAsignatura);
+          if (!ea) {
+            const ins = insertEA.run(est.id, idAsignatura, parseInt(e.convocatorias) || 0, parseInt(e.matriculas) || 0, e.evaluacion_diferenciada || 'No');
+            ea = { id: ins.lastInsertRowid };
+          }
+          asignar(ea.id, idGrupo('Teoría', e.grupo_teoria));
+          asignar(ea.id, idGrupo('Laboratorio', e.grupo_laboratorio));
+          asignar(ea.id, idGrupo('Aula', e.grupo_aula));
+          asignar(ea.id, idGrupo('Tutoría Grupal', e.grupo_tutoria));
+        }
+      }
+    });
+
+    procesar();
+    fs.unlinkSync(req.file.path);
+
+    const algoNuevo =
+      resultado.grupos_creados > 0 ||
+      resultado.alumnos_creados > 0 ||
+      resultado.alumnos_asignados > 0;
+    const mensaje = algoNuevo
+      ? `Grupos importados: ${resultado.grupos_creados} grupos nuevos, ${resultado.alumnos_asignados} asignaciones (${resultado.alumnos_creados} alumnos nuevos).`
+      : 'Esta información ya estaba importada.';
+    return res.json({ mensaje, ya_importado: !algoNuevo, resultado });
+  } catch (err) {
+    console.error(err);
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    return res.status(500).json({ error: `Error al procesar el archivo: ${err.message}` });
+  }
+});
+
+const grupoDeActividad = (actividad) => {
+  const s = String(actividad || '');
+  let m = s.match(/CEX-(.+?)(?:\s+-\s+|$)/i);
+  if (m) return { tipo: 'Teoría', nombre: m[1].trim() };
+  m = s.match(/PAS-(.+?)(?:\s+-\s+|$)/i);
+  if (m) return { tipo: 'Aula', nombre: `Semin-${m[1].trim()}` };
+  return null;
+};
+
+const fechaFichajeAISO = (v) => {
+  const m = String(v || '').trim().match(/^(\d{2})-(\d{2})-(\d{4})/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+};
+
+const parseHorario = (v) => {
+  const s = String(v || '');
+  const t = s.match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/);
+  const a = s.match(/AULA:\s*([^)]+?)\s*\)/i);
+  return {
+    hora_inicio: t ? t[1] : null,
+    hora_fin: t ? t[2] : null,
+    aula: a ? a[1].trim() : null,
+  };
+};
+
+router.post('/asistentes', auth, upload.single('archivo'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Archivo no proporcionado' });
+  const idAsignatura = req.body.id_asignatura;
+  if (!idAsignatura) {
+    fs.unlinkSync(req.file.path);
+    return res.status(400).json({ error: 'Falta id_asignatura' });
+  }
+
+  try {
+    const workbook = xlsx.readFile(req.file.path);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    fs.unlinkSync(req.file.path);
+
+    const norm = (v) => String(v == null ? '' : v).trim();
+    const filas = xlsx.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+    const idxCab = filas.findIndex(
+      (f) => f.some((c) => norm(c) === 'Actividad') && f.some((c) => norm(c) === 'Fecha')
+    );
+    if (idxCab < 0) {
+      return res.status(400).json({ error: 'No se encontró la cabecera (Usuario/Actividad/Fecha)' });
+    }
+    const cab = filas[idxCab];
+    const cU = cab.findIndex((c) => norm(c) === 'Usuario');
+    const cA = cab.findIndex((c) => norm(c) === 'Actividad');
+    const cH = cab.findIndex((c) => norm(c) === 'Horario');
+    const cF = cab.findIndex((c) => norm(c) === 'Fecha');
+
+    const resultado = {
+      fichajes: filas.length - idxCab - 1,
+      sesiones_creadas: 0,
+      asistencias: 0,
+      ignorados_actividad_generica: 0,
+      alumno_no_encontrado: 0,
+      grupo_no_encontrado: 0,
+      alumno_no_en_grupo: 0,
+    };
+
+    const buscarEst = db.prepare('SELECT id FROM estudiantes WHERE LOWER(correo) = LOWER(?)');
+    const buscarGrupo = db.prepare(
+      'SELECT id, id_profesor FROM grupos WHERE id_asignatura = ? AND tipo = ? AND nombre = ?'
+    );
+    const buscarSesion = db.prepare(
+      `SELECT id FROM sesiones WHERE id_grupo = ? AND fecha = ? AND COALESCE(hora_inicio, '') = ? LIMIT 1`
+    );
+    const insertSesion = db.prepare(
+      `INSERT INTO sesiones (fecha, hora_inicio, hora_fin, aula, id_grupo, id_profesor)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    const buscarEAG = db.prepare(`
+      SELECT eag.id FROM estudiantes_asignatura_grupo eag
+      JOIN estudiantes_asignatura ea ON ea.id = eag.id_estudiante_asignatura
+      WHERE ea.id_estudiante = ? AND ea.id_asignatura = ? AND eag.id_grupo = ?
+    `);
+    const marcarAsistencia = db.prepare(`
+      INSERT INTO asistencia_sesion (asistencia, id_sesion, id_estudiante_asignatura_grupo)
+      VALUES ('Si', ?, ?)
+      ON CONFLICT(id_sesion, id_estudiante_asignatura_grupo)
+      DO UPDATE SET asistencia = 'Si'
+    `);
+
+    const procesar = db.transaction(() => {
+      for (let r = idxCab + 1; r < filas.length; r++) {
+        const fila = filas[r];
+        const usuario = norm(fila[cU]);
+        if (!usuario) continue;
+
+        const grupoAct = grupoDeActividad(fila[cA]);
+        if (!grupoAct) {
+          resultado.ignorados_actividad_generica++;
+          continue;
+        }
+        const fecha = fechaFichajeAISO(fila[cF]);
+        if (!fecha) continue;
+
+        const grupo = buscarGrupo.get(idAsignatura, grupoAct.tipo, grupoAct.nombre);
+        if (!grupo) {
+          resultado.grupo_no_encontrado++;
+          continue;
+        }
+        const { hora_inicio, hora_fin, aula } = parseHorario(fila[cH]);
+        let sesion = buscarSesion.get(grupo.id, fecha, hora_inicio || '');
+        if (!sesion) {
+          const ins = insertSesion.run(
+            fecha,
+            hora_inicio,
+            hora_fin,
+            aula,
+            grupo.id,
+            grupo.id_profesor
+          );
+          sesion = { id: ins.lastInsertRowid };
+          resultado.sesiones_creadas++;
+        }
+
+        const est = buscarEst.get(`${usuario}@uniovi.es`);
+        if (!est) {
+          resultado.alumno_no_encontrado++;
+          continue;
+        }
+        const eag = buscarEAG.get(est.id, idAsignatura, grupo.id);
+        if (!eag) {
+          resultado.alumno_no_en_grupo++;
+          continue;
+        }
+        marcarAsistencia.run(sesion.id, eag.id);
+        resultado.asistencias++;
+      }
+    });
+
+    procesar();
+    return res.json({ mensaje: 'Asistencia de fichajes importada', resultado });
+  } catch (err) {
+    console.error(err);
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    return res.status(500).json({ error: `Error al procesar el archivo: ${err.message}` });
+  }
 });
 
 module.exports = router;

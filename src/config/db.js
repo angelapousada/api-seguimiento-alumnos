@@ -1,7 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const DB_PATH = path.join(__dirname, '../../data/seguimiento.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../data/seguimiento.db');
 
 const db = new Database(DB_PATH);
 
@@ -202,7 +202,6 @@ function poblarDatosIniciales() {
     insertTitulacion.run('giitt', 'Grado en Ingeniería Informática en Tecnologías de la Información');
     insertTitulacion.run('giisof', 'Grado en Ingeniería Informática del Software');
 
-    // Cores comunes a ambos grados (sin TFG, sin slots Optativa I/II/III).
     const ano1 = [
       ['Álgebra Lineal', 'AL'],
       ['Ondas y Electromagnetismo', 'OE'],
@@ -263,7 +262,6 @@ function poblarDatosIniciales() {
       ['Prácticas Externas', 'PE'],
     ];
 
-    // Optativas concretas por grado, todas en 4º curso.
     const optativasGiisof = [
       ['Informática Audiovisual', 'IAUD'],
       ['Integración de Aplicaciones Empresariales', 'IAE'],
@@ -330,3 +328,4 @@ seedAdmin();
 
 module.exports = db;
 module.exports.poblarDatosIniciales = poblarDatosIniciales;
+module.exports.seedAdmin = seedAdmin;

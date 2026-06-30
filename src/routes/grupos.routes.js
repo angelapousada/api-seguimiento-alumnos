@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../config/db');
 const auth = require('../middlewares/auth');
+const { leerHojaConCabecera, recortarNombreGrupo } = require('../utils/cargaExcel');
 
 const router = express.Router();
 
@@ -56,6 +57,16 @@ router.post('/', auth, (req, res) => {
   }
 
   try {
+    const duplicado = db.prepare(`
+      SELECT id FROM grupos
+      WHERE id_asignatura = ?
+        AND tipo = ?
+        AND LOWER(TRIM(nombre)) = LOWER(TRIM(?))
+    `).get(id_asignatura, tipo, nombre);
+    if (duplicado) {
+      return res.status(409).json({ error: 'Ya existe un grupo con ese nombre y tipo en la asignatura' });
+    }
+
     const result = db.prepare(`
       INSERT INTO grupos (nombre, tipo, aula, id_asignatura, id_profesor)
       VALUES (?, ?, ?, ?, ?)
@@ -150,6 +161,19 @@ router.put('/:id', auth, (req, res) => {
       return res.status(404).json({ error: 'Grupo no encontrado' });
     }
 
+    const nombreFinal = nombre !== undefined ? nombre : grupo.nombre;
+    const tipoFinal = tipo !== undefined ? tipo : grupo.tipo;
+    const duplicado = db.prepare(`
+      SELECT id FROM grupos
+      WHERE id_asignatura = ?
+        AND tipo = ?
+        AND LOWER(TRIM(nombre)) = LOWER(TRIM(?))
+        AND id != ?
+    `).get(grupo.id_asignatura, tipoFinal, nombreFinal, id);
+    if (duplicado) {
+      return res.status(409).json({ error: 'Ya existe un grupo con ese nombre y tipo en la asignatura' });
+    }
+
     db.prepare(`
       UPDATE grupos
       SET nombre = ?, tipo = ?, aula = ?, id_profesor = ?
@@ -216,8 +240,10 @@ router.put('/:id/horarios', auth, (req, res) => {
 });
 
 const COL_GRUPO_POR_TIPO = {
-  'Teoría': ['Grupo de Teoría', 'Grupo de Teoria', 'GRUPO DE TEORÍA', 'GRUPO DE TEORIA'],
-  'Laboratorio': ['Grupo de Prácticas de Laboratorio', 'Grupo de Practicas de Laboratorio', 'GRUPO DE PRÁCTICAS DE LABORATORIO', 'GRUPO DE PRACTICAS DE LABORATORIO'],
+  'Teoría': ['Clases Expositivas', 'Grupo de Teoría', 'Grupo de Teoria', 'GRUPO DE TEORÍA', 'GRUPO DE TEORIA'],
+  'Laboratorio': ['Prácticas de Laboratorio', 'Practicas de Laboratorio', 'Grupo de Prácticas de Laboratorio', 'Grupo de Practicas de Laboratorio'],
+  'Aula': ['Prácticas de Aula', 'Practicas de Aula', 'Grupo de Prácticas de Aula', 'Grupo de Practicas de Aula'],
+  'Tutoría Grupal': ['Tutorías Grupales', 'Tutorias Grupales', 'Grupo de Tutorías Grupales'],
 };
 
 router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res) => {
@@ -239,7 +265,7 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
 
     const workbook = xlsx.readFile(req.file.path);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const datos = xlsx.utils.sheet_to_json(sheet, { defval: null });
+    const { datos } = leerHojaConCabecera(sheet, { cabecera: 'DNI' });
     fs.unlinkSync(req.file.path);
 
     if (datos.length === 0) {
@@ -247,15 +273,22 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
     }
 
     const cols = Object.keys(datos[0]);
-    const findCol = (names) => names.find((n) => cols.includes(n)) || null;
-    const colDni = findCol(['DNI', 'dni', 'NIF']);
-    const colNombre = findCol(['Nombre completo', 'Nombre', 'nombre', 'NOMBRE']);
-    const colCorreo = findCol(['Correo', 'correo', 'EMAIL', 'email']);
-    const colMovilidad = findCol(['Movilidad', 'movilidad']);
-    const colConvocatorias = findCol(['Convocatorias', 'convocatorias']);
-    const colMatriculas = findCol(['Matrículas', 'Matriculas', 'matriculas']);
-    const colEvalDif = findCol(['Evaluación diferenciada', 'Evaluacion diferenciada', 'evaluacion_diferenciada']);
-    const colNee = findCol(['Necesidades educativas especiales', 'Necesidades especiales', 'necesidades_especiales', 'NEE']);
+    const findCol = (names) => {
+      for (const n of names) {
+        const lc = n.toLowerCase();
+        const k = cols.find((c) => c.toLowerCase() === lc) || cols.find((c) => c.toLowerCase().startsWith(lc));
+        if (k) return k;
+      }
+      return null;
+    };
+    const colDni = findCol(['DNI', 'NIF']);
+    const colNombre = findCol(['Alumno', 'Nombre completo', 'Nombre']);
+    const colCorreo = findCol(['Email', 'Correo']);
+    const colMovilidad = findCol(['Movilidad Erasmus', 'Movilidad']);
+    const colConvocatorias = findCol(['Convocatorias']);
+    const colMatriculas = findCol(['Matrículas', 'Matriculas']);
+    const colEvalDif = findCol(['Evalución Diferenciada', 'Evaluación Diferenciada', 'Evaluacion Diferenciada']);
+    const colNee = findCol(['Necesidades educativas especiales', 'Necesidades especiales', 'NEE']);
     const colGrupo = findCol(nombresColumna);
 
     if (!colGrupo) {
@@ -266,7 +299,9 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
 
     const norm = (v) => (v == null ? '' : String(v).trim());
 
-    const filasGrupo = datos.filter((row) => norm(row[colGrupo]) === norm(grupo.nombre));
+    const filasGrupo = datos.filter(
+      (row) => norm(recortarNombreGrupo(grupo.tipo, row[colGrupo])) === norm(grupo.nombre)
+    );
 
     const resultado = {
       total_excel: datos.length,

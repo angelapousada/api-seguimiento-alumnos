@@ -377,9 +377,6 @@ router.post('/:id/cambiar-grupo', auth, (req, res) => {
       return res.status(400).json({ error: 'El estudiante ya está en ese grupo' });
     }
 
-    // Si el alumno ya está en algún grupo del mismo tipo, hacemos UPDATE
-    // para preservar el id del EAG (y por tanto las asistencias asociadas).
-    // Si no, INSERT.
     const cambiar = db.transaction(() => {
       const existente = db.prepare(`
         SELECT eag.id

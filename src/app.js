@@ -56,6 +56,7 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 const SSL_KEY = process.env.SSL_KEY;
 const SSL_CERT = process.env.SSL_CERT;
 
@@ -64,12 +65,12 @@ if (SSL_KEY && SSL_CERT) {
     key: fs.readFileSync(SSL_KEY),
     cert: fs.readFileSync(SSL_CERT),
   };
-  https.createServer(sslOptions, app).listen(PORT, () => {
-    console.log(`Servidor HTTPS escuchando en https://localhost:${PORT}`);
+  https.createServer(sslOptions, app).listen(PORT, HOST, () => {
+    console.log(`Servidor HTTPS escuchando en https://${HOST}:${PORT}`);
   });
 } else {
-  app.listen(PORT, () => {
-    console.log(`Servidor HTTP escuchando en http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`Servidor HTTP escuchando en http://${HOST}:${PORT}`);
   });
 }
 

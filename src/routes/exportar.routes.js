@@ -5,16 +5,6 @@ const auth = require('../middlewares/auth');
 
 const router = express.Router();
 
-/**
- * GET /api/asignaturas/:id/exportar?id_grupo=<opcional>
- *
- * Exportación de seguimiento de una asignatura a un fichero Excel.
- *   - Resumen: una fila por estudiante y grupo con totales y porcentajes.
- *   - Asistencia: una fila por estudiante y sesión.
- *   - Entregas: una fila por entrega registrada.
- *   - Valoraciones: una fila por concepto valorado.
- *   - Exámenes: una fila por estudiante y examen.
- */
 router.get('/:id/exportar', auth, (req, res) => {
   const { id } = req.params;
   const { id_grupo } = req.query;
@@ -113,7 +103,6 @@ router.get('/:id/exportar', auth, (req, res) => {
             'Fecha': sesion.fecha,
             'Hora': sesion.hora_inicio || '',
             'Asistencia': asistencia ? asistencia.asistencia : 'No',
-            'Comentario': (asistencia && asistencia.comentario) || '',
           });
 
           const entrega = stmtEntrega.get(sesion.id, est.id_eag);
@@ -201,6 +190,59 @@ router.get('/:id/exportar', auth, (req, res) => {
     }
 
     const workbook = XLSX.utils.book_new();
+
+    const titulacion = db
+      .prepare('SELECT nombre FROM titulaciones WHERE id = ?')
+      .get(asignatura.id_titulacion);
+    const alumnos = id_grupo
+      ? db.prepare(`
+          SELECT DISTINCT ea.id AS id_ea, e.dni, e.nombre, e.correo, e.movilidad,
+                 ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
+          FROM estudiantes_asignatura_grupo eag
+          JOIN estudiantes_asignatura ea ON ea.id = eag.id_estudiante_asignatura
+          JOIN estudiantes e ON e.id = ea.id_estudiante
+          WHERE eag.id_grupo = ? ORDER BY e.nombre
+        `).all(id_grupo)
+      : db.prepare(`
+          SELECT ea.id AS id_ea, e.dni, e.nombre, e.correo, e.movilidad,
+                 ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
+          FROM estudiantes_asignatura ea
+          JOIN estudiantes e ON e.id = ea.id_estudiante
+          WHERE ea.id_asignatura = ? ORDER BY e.nombre
+        `).all(id);
+    const stmtGruposAlumno = db.prepare(`
+      SELECT g.tipo, g.nombre FROM estudiantes_asignatura_grupo eag
+      JOIN grupos g ON g.id = eag.id_grupo
+      WHERE eag.id_estudiante_asignatura = ?
+    `);
+    const filasAlumnos = [
+      ['LISTADO DE ALUMNOS MATRICULADOS'],
+      [],
+      ['', 'Plan:', titulacion ? titulacion.nombre : ''],
+      [],
+      ['', 'Asignatura:', asignatura.nombre],
+      [],
+      ['', 'Curso Académico:', ''],
+      [],
+      ['Nº', 'DNI', 'Alumno', 'Email', 'Convocatorias', 'Matrículas',
+        'Evalución Diferenciada', 'Movilidad Erasmus', 'Clases Expositivas',
+        'Prácticas de Aula/Semina', 'Prácticas de Laboratorio', 'Tutorías Grupales'],
+    ];
+    alumnos.forEach((a, i) => {
+      const g = { 'Teoría': '', 'Aula': '', 'Laboratorio': '', 'Tutoría Grupal': '' };
+      for (const row of stmtGruposAlumno.all(a.id_ea)) {
+        if (row.tipo in g) g[row.tipo] = row.nombre;
+      }
+      filasAlumnos.push([
+        i + 1, a.dni || '', a.nombre || '', a.correo || '',
+        a.convocatorias ?? '', a.matriculas ?? '',
+        a.evaluacion_diferenciada || 'No', a.movilidad || 'No',
+        g['Teoría'], g['Aula'], g['Laboratorio'], g['Tutoría Grupal'],
+      ]);
+    });
+    const hojaAlumnos = XLSX.utils.aoa_to_sheet(filasAlumnos);
+    XLSX.utils.book_append_sheet(workbook, hojaAlumnos, 'Alumnos');
+
     const agregarHoja = (nombre, filas, columnas) => {
       const hoja = filas.length > 0
         ? XLSX.utils.json_to_sheet(filas)
@@ -220,12 +262,12 @@ router.get('/:id/exportar', auth, (req, res) => {
       'Exámenes asistidos', 'Total exámenes', 'Valoración media',
     ]);
     agregarHoja('Asistencia', filasAsistencia, [
-      'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Fecha', 'Hora', 'Asistencia', 'Comentario',
+      'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Fecha', 'Hora', 'Asistencia',
     ]);
     agregarHoja('Entregas', filasEntregas, [
       'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Fecha sesión', 'Entrega', 'Valoración', 'Comentario',
     ]);
-    agregarHoja('Valoraciones', filasValoraciones, [
+    agregarHoja('Conceptos a evaluar', filasValoraciones, [
       'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Fecha sesión', 'Concepto', 'Valoración', 'Comentario',
     ]);
     agregarHoja('Exámenes', filasExamenes, [

@@ -14,7 +14,9 @@ Type=simple
 # Usuario sin privilegios propietario del directorio de la app (NO root).
 User=seguimiento
 Group=seguimiento
-# Ruta absoluta del proyecto en la VM (debe contener .env, certs/, data/).
+# Ruta absoluta del proyecto en la VM (debe contener .env y data/).
+# En producción tras el proxy inverso (Caddy) NO se necesita certs/: el TLS lo
+# gestiona Caddy con Let's Encrypt y la API arranca en HTTP sobre 127.0.0.1.
 WorkingDirectory=/opt/api-seguimiento-alumnos
 # Ruta absoluta a node (comprueba con `which node`).
 ExecStart=/usr/bin/node src/app.js

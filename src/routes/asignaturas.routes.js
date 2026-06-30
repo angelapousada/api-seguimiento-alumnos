@@ -8,9 +8,24 @@ const router = express.Router();
 router.get('/', auth, (req, res) => {
   try {
     if (req.user.rol === 0) {
+      const idsAsignadas = new Set();
+      for (const u of db.prepare('SELECT ids_asignatura FROM usuarios').all()) {
+        try {
+          JSON.parse(u.ids_asignatura || '[]').forEach((x) => {
+            const n = Number(x);
+            if (!Number.isNaN(n)) idsAsignadas.add(n);
+          });
+        } catch (_) {  }
+      }
+      const lista = [...idsAsignadas];
+      const ph = lista.length ? lista.map(() => '?').join(',') : 'NULL';
       const asignaturas = db.prepare(
-        'SELECT * FROM catalogo_asignaturas WHERE creada = 1 ORDER BY id_titulacion, curso, nombre'
-      ).all();
+        `SELECT ca.* FROM catalogo_asignaturas ca
+         WHERE ca.creada = 1
+            OR ca.id IN (${ph})
+            OR EXISTS (SELECT 1 FROM grupos g WHERE g.id_asignatura = ca.id)
+         ORDER BY ca.id_titulacion, ca.curso, ca.nombre`
+      ).all(...lista);
       return res.json(asignaturas);
     }
 
@@ -35,14 +50,11 @@ router.get('/', auth, (req, res) => {
       .prepare(
         `SELECT DISTINCT ca.*
          FROM catalogo_asignaturas ca
-         WHERE ca.creada = 1
-           AND (
-             ca.id IN (${placeholders})
-             OR EXISTS (
-               SELECT 1 FROM grupos g
-               WHERE g.id_asignatura = ca.id AND g.id_profesor IS NULL
-             )
-           )
+         WHERE ca.id IN (${placeholders})
+            OR EXISTS (
+              SELECT 1 FROM grupos g
+              WHERE g.id_asignatura = ca.id AND g.id_profesor IS NULL
+            )
          ORDER BY ca.id_titulacion, ca.curso, ca.nombre`
       )
       .all(...idsAsignadas);
@@ -106,7 +118,7 @@ router.get('/:id/profesores', auth, (req, res) => {
   try {
     const idAsignatura = String(req.params.id);
     const profesores = db
-      .prepare("SELECT id, nombre, apellidos, ids_asignatura FROM usuarios WHERE rol = 1")
+      .prepare('SELECT id, nombre, apellidos, ids_asignatura FROM usuarios')
       .all();
 
     const resultado = [];
@@ -184,6 +196,7 @@ router.post('/desactivar/:id', auth, isAdmin, (req, res) => {
 
 router.post('/guardar-carga', auth, (req, res) => {
   const { nombre, curso, titulacion, estudiantes, fecha_inicio, fecha_fin } = req.body;
+  const idProfesor = req.user.id;
 
   if (!nombre || !estudiantes || !Array.isArray(estudiantes)) {
     return res.status(400).json({ error: 'nombre y estudiantes son obligatorios' });
@@ -191,62 +204,114 @@ router.post('/guardar-carga', auth, (req, res) => {
 
   try {
     const guardar = db.transaction(() => {
-      const titulacionRow = db.prepare('SELECT id FROM titulaciones WHERE id = ? OR nombre LIKE ?').get(titulacion, `%${titulacion}%`);
-      let titulacionId = titulacionRow?.id || 'default';
-
-      if (!titulacionRow) {
-        db.prepare('INSERT INTO titulaciones (id, nombre) VALUES (?, ?)').run(titulacionId, titulacion);
-      }
-
-      let asignatura = db.prepare('SELECT id FROM catalogo_asignaturas WHERE nombre = ? AND id_titulacion = ?').get(nombre, titulacionId);
+      let asignatura = db
+        .prepare('SELECT id FROM catalogo_asignaturas WHERE nombre = ? AND creada = 1')
+        .get(nombre);
 
       if (!asignatura) {
-        const r = db.prepare(`
-          INSERT INTO catalogo_asignaturas (nombre, codigo, id_titulacion, curso, creada, fecha_inicio, fecha_fin)
-          VALUES (?, ?, ?, ?, 1, ?, ?)
-        `).run(nombre, nombre.substring(0, 10).toUpperCase(), titulacionId, curso || '1', fecha_inicio || null, fecha_fin || null);
-        asignatura = { id: r.lastInsertRowid };
+        let titulacionId = 'default';
+        if (titulacion) {
+          const exacta = db.prepare('SELECT id FROM titulaciones WHERE id = ?').get(titulacion);
+          const contenida = exacta
+            ? null
+            : db.prepare("SELECT id FROM titulaciones WHERE ? LIKE '%' || nombre || '%'").get(titulacion);
+          if (exacta) {
+            titulacionId = exacta.id;
+          } else if (contenida) {
+            titulacionId = contenida.id;
+          } else {
+            const m = String(titulacion).match(/\(([^)]+)\)\s*$/);
+            titulacionId = (m ? m[1] : titulacion).toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20) || 'default';
+            if (!db.prepare('SELECT id FROM titulaciones WHERE id = ?').get(titulacionId)) {
+              db.prepare('INSERT INTO titulaciones (id, nombre) VALUES (?, ?)').run(titulacionId, titulacion);
+            }
+          }
+        }
+        if (titulacionId === 'default' && !db.prepare('SELECT id FROM titulaciones WHERE id = ?').get('default')) {
+          db.prepare('INSERT INTO titulaciones (id, nombre) VALUES (?, ?)').run('default', 'Sin titulación');
+        }
+
+        asignatura = db
+          .prepare('SELECT id FROM catalogo_asignaturas WHERE nombre = ? AND id_titulacion = ?')
+          .get(nombre, titulacionId);
+        if (asignatura) {
+          db.prepare(`
+            UPDATE catalogo_asignaturas
+            SET creada = 1, fecha_inicio = COALESCE(?, fecha_inicio), fecha_fin = COALESCE(?, fecha_fin)
+            WHERE id = ?
+          `).run(fecha_inicio || null, fecha_fin || null, asignatura.id);
+        } else {
+          const r = db.prepare(`
+            INSERT INTO catalogo_asignaturas (nombre, codigo, id_titulacion, curso, creada, fecha_inicio, fecha_fin)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+          `).run(nombre, nombre.substring(0, 10).toUpperCase(), titulacionId, curso || '1', fecha_inicio || null, fecha_fin || null);
+          asignatura = { id: r.lastInsertRowid };
+        }
       } else {
         db.prepare(`
           UPDATE catalogo_asignaturas
-          SET creada = 1,
-              fecha_inicio = COALESCE(?, fecha_inicio),
-              fecha_fin = COALESCE(?, fecha_fin)
+          SET fecha_inicio = COALESCE(?, fecha_inicio), fecha_fin = COALESCE(?, fecha_fin)
           WHERE id = ?
         `).run(fecha_inicio || null, fecha_fin || null, asignatura.id);
       }
 
-      for (const est of estudiantes) {
-        let estudiante = db.prepare('SELECT id FROM estudiantes WHERE dni = ?').get(est.dni);
+      const buscarEst = db.prepare('SELECT id FROM estudiantes WHERE dni = ?');
+      const buscarEstSinDni = db.prepare('SELECT id FROM estudiantes WHERE nombre = ? AND dni IS NULL');
+      const insertEst = db.prepare(`
+        INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      const buscarEA = db.prepare('SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?');
+      const insertEA = db.prepare(`
+        INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, convocatorias, matriculas, matricula, evaluacion_diferenciada)
+        VALUES (?, ?, ?, ?, 'Si', ?)
+      `);
+      const updateEA = db.prepare(
+        'UPDATE estudiantes_asignatura SET convocatorias = ?, matriculas = ?, evaluacion_diferenciada = ? WHERE id = ?'
+      );
+      const buscarGrupo = db.prepare('SELECT id FROM grupos WHERE id_asignatura = ? AND tipo = ? AND nombre = ?');
+      const insertGrupo = db.prepare('INSERT INTO grupos (nombre, tipo, id_asignatura, id_profesor) VALUES (?, ?, ?, ?)');
+      const buscarEAG = db.prepare('SELECT id FROM estudiantes_asignatura_grupo WHERE id_estudiante_asignatura = ? AND id_grupo = ?');
+      const insertEAG = db.prepare('INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo) VALUES (?, ?)');
 
-        if (!estudiante && est.dni) {
-          const r = db.prepare(`
-            INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
-            VALUES (?, ?, ?, ?, ?)
-          `).run(est.dni, est.nombre, est.correo, est.movilidad || 'No', est.necesidades_especiales || 'No');
+      const idGrupo = (tipo, nombreGrupo) => {
+        if (!nombreGrupo) return null;
+        let g = buscarGrupo.get(asignatura.id, tipo, nombreGrupo);
+        if (!g) {
+          const r = insertGrupo.run(nombreGrupo, tipo, asignatura.id, idProfesor);
+          g = { id: r.lastInsertRowid };
+        }
+        return g.id;
+      };
+      const asignarGrupo = (eaId, gId) => {
+        if (gId && !buscarEAG.get(eaId, gId)) insertEAG.run(eaId, gId);
+      };
+
+      for (const est of estudiantes) {
+        let estudiante = est.dni ? buscarEst.get(est.dni) : null;
+        if (!estudiante && !est.dni) estudiante = buscarEstSinDni.get(est.nombre);
+        if (!estudiante) {
+          const r = insertEst.run(
+            est.dni || null, est.nombre || '', est.correo || null,
+            est.movilidad || 'No', est.necesidades_especiales || 'No'
+          );
           estudiante = { id: r.lastInsertRowid };
         }
 
-        if (!estudiante) {
-          estudiante = db.prepare('SELECT id FROM estudiantes WHERE nombre = ? AND dni IS NULL').get(est.nombre);
-          if (!estudiante) {
-            const r = db.prepare(`
-              INSERT INTO estudiantes (nombre, correo, movilidad, necesidades_especiales)
-              VALUES (?, ?, ?, ?)
-            `).run(est.nombre, est.correo, est.movilidad || 'No', est.necesidades_especiales || 'No');
-            estudiante = { id: r.lastInsertRowid };
-          }
-        }
-
-        let ea = db.prepare('SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?').get(estudiante.id, asignatura.id);
-
+        const convocatorias = parseInt(est.convocatorias) || 0;
+        const matriculas = parseInt(est.matriculas) || 0;
+        let ea = buscarEA.get(estudiante.id, asignatura.id);
         if (!ea) {
-          const r = db.prepare(`
-            INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, matricula, evaluacion_diferenciada)
-            VALUES (?, ?, ?, ?)
-          `).run(estudiante.id, asignatura.id, 'Si', est.evaluacion_diferenciada || 'No');
+          const r = insertEA.run(estudiante.id, asignatura.id, convocatorias, matriculas, est.evaluacion_diferenciada || 'No');
           ea = { id: r.lastInsertRowid };
+        } else {
+          updateEA.run(convocatorias, matriculas, est.evaluacion_diferenciada || 'No', ea.id);
         }
+
+        asignarGrupo(ea.id, idGrupo('Teoría', est.grupo_teoria));
+        asignarGrupo(ea.id, idGrupo('Laboratorio', est.grupo_laboratorio));
+        asignarGrupo(ea.id, idGrupo('Aula', est.grupo_aula));
+        asignarGrupo(ea.id, idGrupo('Tutoría Grupal', est.grupo_tutoria));
       }
 
       return asignatura;

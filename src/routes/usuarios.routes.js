@@ -166,7 +166,6 @@ router.post('/:id/imagen', auth, uploadImagenPerfil.single('imagen'), (req, res)
     return res.status(400).json({ error: 'Imagen no proporcionada (jpg/jpeg/png).' });
   }
 
-  // Solo el propio usuario o un admin pueden cambiar la imagen.
   if (String(req.user.id) !== String(id) && req.user.rol !== 0) {
     try { fs.unlinkSync(fichero.path); } catch (_) {}
     return res.status(403).json({ error: 'No autorizado' });
@@ -184,7 +183,6 @@ router.post('/:id/imagen', auth, uploadImagenPerfil.single('imagen'), (req, res)
     const destinoRel = path.join('uploads', 'perfiles', `${base}${ext}`);
     const destinoAbs = path.join(__dirname, '../../', destinoRel);
 
-    // Limpiamos versiones anteriores con cualquier extensión.
     for (const e of IMG_EXTS) {
       const previo = path.join(PERFILES_DIR, `${base}${e}`);
       if (previo !== destinoAbs && fs.existsSync(previo)) {
