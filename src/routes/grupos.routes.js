@@ -24,7 +24,8 @@ router.get('/', auth, (req, res) => {
 
   try {
     let query = `
-      SELECT g.*, u.nombre AS nombre_profesor, u.apellidos AS apellidos_profesor
+      SELECT g.*, u.nombre AS nombre_profesor, u.apellidos AS apellidos_profesor,
+        (SELECT COUNT(*) FROM sesiones s WHERE s.id_grupo = g.id) AS num_sesiones
       FROM grupos g
       LEFT JOIN usuarios u ON u.id = g.id_profesor
       WHERE 1=1
@@ -68,9 +69,10 @@ router.post('/', auth, (req, res) => {
     }
 
     const result = db.prepare(`
-      INSERT INTO grupos (nombre, tipo, aula, id_asignatura, id_profesor)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(nombre, tipo, aula || null, id_asignatura, id_profesor || null);
+      INSERT INTO grupos (nombre, tipo, aula, id_asignatura, id_profesor, entregas_activadas)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(nombre, tipo, aula || null, id_asignatura, id_profesor || null,
+      tipo === 'Laboratorio' ? 1 : 0);
 
     const grupo = db.prepare('SELECT * FROM grupos WHERE id = ?').get(result.lastInsertRowid);
     return res.status(201).json(grupo);
@@ -123,6 +125,7 @@ router.get('/:id/estudiantes', auth, (req, res) => {
         e.movilidad,
         e.necesidades_especiales,
         e.ruta_imagen,
+        e.plan,
         ea.convocatorias,
         ea.matriculas,
         ea.matricula,
@@ -153,12 +156,21 @@ router.get('/:id/horarios', auth, (req, res) => {
 
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
-  const { nombre, tipo, aula, id_profesor } = req.body;
+  const { nombre, tipo, aula, id_profesor, entregas_activadas } = req.body;
 
   try {
     const grupo = db.prepare('SELECT * FROM grupos WHERE id = ?').get(id);
     if (!grupo) {
       return res.status(404).json({ error: 'Grupo no encontrado' });
+    }
+
+    // Entregas: obligatorias (siempre 1) en Laboratorio; opcionales en el resto.
+    const tipoResultante = tipo !== undefined ? tipo : grupo.tipo;
+    let entregasFinal = grupo.entregas_activadas;
+    if (tipoResultante === 'Laboratorio') {
+      entregasFinal = 1;
+    } else if (entregas_activadas !== undefined) {
+      entregasFinal = entregas_activadas ? 1 : 0;
     }
 
     const nombreFinal = nombre !== undefined ? nombre : grupo.nombre;
@@ -176,18 +188,20 @@ router.put('/:id', auth, (req, res) => {
 
     db.prepare(`
       UPDATE grupos
-      SET nombre = ?, tipo = ?, aula = ?, id_profesor = ?
+      SET nombre = ?, tipo = ?, aula = ?, id_profesor = ?, entregas_activadas = ?
       WHERE id = ?
     `).run(
       nombre !== undefined ? nombre : grupo.nombre,
       tipo !== undefined ? tipo : grupo.tipo,
       aula !== undefined ? aula : grupo.aula,
       id_profesor !== undefined ? id_profesor : grupo.id_profesor,
+      entregasFinal,
       id
     );
 
     const actualizado = db.prepare(`
-      SELECT g.*, u.nombre AS nombre_profesor, u.apellidos AS apellidos_profesor
+      SELECT g.*, u.nombre AS nombre_profesor, u.apellidos AS apellidos_profesor,
+        (SELECT COUNT(*) FROM sesiones s WHERE s.id_grupo = g.id) AS num_sesiones
       FROM grupos g
       LEFT JOIN usuarios u ON u.id = g.id_profesor
       WHERE g.id = ?
@@ -265,8 +279,9 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
 
     const workbook = xlsx.readFile(req.file.path);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const { datos } = leerHojaConCabecera(sheet, { cabecera: 'DNI' });
+    const { meta, datos } = leerHojaConCabecera(sheet, { cabecera: 'DNI' });
     fs.unlinkSync(req.file.path);
+    const plan = (meta && meta.plan) ? String(meta.plan).trim() : '';
 
     if (datos.length === 0) {
       return res.status(400).json({ error: 'El archivo está vacío' });
@@ -313,11 +328,14 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
     };
 
     const findEstudianteStmt = db.prepare(
-      'SELECT id FROM estudiantes WHERE dni = ? OR (dni IS NULL AND LOWER(correo) = LOWER(?))'
+      `SELECT id FROM estudiantes
+       WHERE (? IS NOT NULL AND dni = ?)
+          OR (? IS NOT NULL AND LOWER(correo) = LOWER(?))`
     );
     const insertEstudianteStmt = db.prepare(
-      'INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales, plan) VALUES (?, ?, ?, ?, ?, ?)'
     );
+    const updatePlanStmt = db.prepare('UPDATE estudiantes SET plan = ? WHERE id = ?');
     const findEAStmt = db.prepare(
       'SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?'
     );
@@ -358,13 +376,14 @@ router.post('/:id/cargar-alumnos', auth, uploadXlsx.single('archivo'), (req, res
           continue;
         }
 
-        let estudiante = findEstudianteStmt.get(dni, correo);
+        let estudiante = findEstudianteStmt.get(dni, dni, correo, correo);
         if (!estudiante) {
-          const r = insertEstudianteStmt.run(dni, nombre, correo, movilidad, nee);
+          const r = insertEstudianteStmt.run(dni, nombre, correo, movilidad, nee, plan);
           estudiante = { id: r.lastInsertRowid };
           resultado.creados++;
         } else {
           resultado.ya_existian++;
+          if (plan) updatePlanStmt.run(plan, estudiante.id);
         }
 
         let ea = findEAStmt.get(estudiante.id, grupo.id_asignatura);

@@ -52,7 +52,7 @@ function formatUsuario(u) {
 
 router.get('/', auth, isAdmin, (req, res) => {
   try {
-    const usuarios = db.prepare('SELECT * FROM usuarios').all();
+    const usuarios = db.prepare('SELECT * FROM usuarios ORDER BY rol, nombre, apellidos').all();
     return res.json(usuarios.map(formatUsuario));
   } catch (err) {
     console.error(err);
@@ -103,12 +103,36 @@ router.post('/', auth, isAdmin, async (req, res) => {
 
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
-  const { nombre, apellidos, idioma, ids_asignatura, nombres_asignatura } = req.body;
+  const { nombre, apellidos, idioma, ids_asignatura, nombres_asignatura, rol } = req.body;
 
   try {
     const usuario = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
     if (!usuario) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    // El rol solo lo puede modificar un administrador.
+    let rolFinal = usuario.rol;
+    if (rol !== undefined && req.user.rol === 0) {
+      const rolInt = parseInt(rol, 10) === 0 ? 0 : 1;
+      // Nadie puede cambiar su propio rol en su propia sesión.
+      if (String(req.user.id) === String(id) && rolInt !== usuario.rol) {
+        return res.status(400).json({
+          codigo: 'no_cambiar_propio_rol',
+          error: 'No puedes cambiar tu propio rol',
+        });
+      }
+      // Salvaguarda: no degradar al último administrador.
+      if (usuario.rol === 0 && rolInt !== 0) {
+        const admins = db.prepare('SELECT COUNT(*) AS cnt FROM usuarios WHERE rol = 0').get();
+        if (admins.cnt <= 1) {
+          return res.status(400).json({
+            codigo: 'ultimo_admin',
+            error: 'No se puede degradar al último administrador',
+          });
+        }
+      }
+      rolFinal = rolInt;
     }
 
     let idsJSON;
@@ -139,7 +163,7 @@ router.put('/:id', auth, (req, res) => {
 
     db.prepare(`
       UPDATE usuarios
-      SET nombre = ?, apellidos = ?, idioma = ?, ids_asignatura = ?, nombres_asignatura = ?
+      SET nombre = ?, apellidos = ?, idioma = ?, ids_asignatura = ?, nombres_asignatura = ?, rol = ?
       WHERE id = ?
     `).run(
       nombre !== undefined ? nombre : usuario.nombre,
@@ -147,6 +171,7 @@ router.put('/:id', auth, (req, res) => {
       idioma !== undefined ? idioma : usuario.idioma,
       idsJSON,
       nombresJSON,
+      rolFinal,
       id
     );
 
@@ -207,6 +232,10 @@ router.delete('/:id', auth, isAdmin, (req, res) => {
   const { id } = req.params;
 
   try {
+    if (String(req.user.id) === String(id)) {
+      return res.status(400).json({ codigo: 'no_eliminarte', error: 'No puedes eliminarte a ti mismo' });
+    }
+
     const usuario = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
     if (!usuario) {
       return res.status(404).json({ codigo: 'usuario_no_encontrado', error: 'Usuario no encontrado' });

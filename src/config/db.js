@@ -1,12 +1,39 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../data/seguimiento.db');
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, '../../data/backups');
 
-const db = new Database(DB_PATH);
+function abrirConexion() {
+  const conn = new Database(DB_PATH);
+  conn.pragma('foreign_keys = ON');
+  conn.pragma('journal_mode = WAL');
+  return conn;
+}
 
-db.pragma('foreign_keys = ON');
-db.pragma('journal_mode = WAL');
+// Conexión viva. Se reasigna al restaurar una copia de seguridad.
+let conexion = abrirConexion();
+
+// Los demás módulos hacen `require('../config/db')` una sola vez, así que
+// exponemos un Proxy que siempre delega en la conexión actual. Así, tras
+// restaurar una copia (que crea una conexión nueva), esas referencias siguen
+// apuntando a la base de datos correcta sin quedarse obsoletas.
+const helpers = {};
+const db = new Proxy(
+  {},
+  {
+    get(_t, prop) {
+      if (prop in helpers) return helpers[prop];
+      const valor = conexion[prop];
+      return typeof valor === 'function' ? valor.bind(conexion) : valor;
+    },
+    set(_t, prop, valor) {
+      helpers[prop] = valor;
+      return true;
+    },
+  }
+);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS usuarios (
@@ -187,7 +214,10 @@ ensureColumn('catalogo_asignaturas', 'fecha_inicio', 'TEXT');
 ensureColumn('catalogo_asignaturas', 'fecha_fin', 'TEXT');
 ensureColumn('estudiantes_asignatura', 'evaluacion_diferenciada', "TEXT DEFAULT 'No'");
 ensureColumn('estudiantes', 'necesidades_especiales', "TEXT DEFAULT 'No'");
+ensureColumn('estudiantes', 'plan', "TEXT DEFAULT ''");
 ensureColumn('usuarios', 'ruta_imagen', "TEXT DEFAULT 'Sin asignar'");
+ensureColumn('grupos', 'entregas_activadas', 'INTEGER DEFAULT 0');
+db.prepare("UPDATE grupos SET entregas_activadas = 1 WHERE tipo = 'Laboratorio'").run();
 
 function poblarDatosIniciales() {
   const existing = db.prepare('SELECT COUNT(*) as cnt FROM titulaciones').get();
@@ -326,6 +356,81 @@ function seedAdmin() {
 
 seedAdmin();
 
+// Devuelve una imagen completa (Buffer) de la base de datos actual, lista para
+// descargar como fichero de copia de seguridad.
+function serializarBaseDatos() {
+  conexion.pragma('wal_checkpoint(TRUNCATE)');
+  return conexion.serialize();
+}
+
+// Guarda una copia de seguridad del estado actual en BACKUP_DIR y devuelve la
+// ruta del fichero generado.
+function guardarCopiaSeguridad(sello) {
+  if (!fs.existsSync(BACKUP_DIR)) {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  }
+  const marca = (sello || new Date().toISOString()).replace(/[:.]/g, '-');
+  const destino = path.join(BACKUP_DIR, `seguimiento_${marca}.db`);
+  fs.writeFileSync(destino, serializarBaseDatos());
+  return destino;
+}
+
+// Reemplaza la base de datos en una sola operación: valida el fichero recibido,
+// guarda una copia de seguridad del estado actual y sustituye la BD viva.
+function reemplazarBaseDatos(buffer) {
+  const tmp = DB_PATH + '.nuevo';
+  fs.writeFileSync(tmp, buffer);
+
+  // 1. Validar que el fichero es una BD SQLite coherente con este proyecto.
+  //    Se valida sobre un fichero real (no un Buffer) para que el modo WAL de
+  //    la cabecera pueda gestionarse correctamente.
+  let prueba;
+  try {
+    prueba = new Database(tmp);
+    const tabla = prueba
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='usuarios'"
+      )
+      .get();
+    if (!tabla) {
+      throw new Error('no contiene datos de esta aplicación');
+    }
+  } catch (err) {
+    if (prueba) prueba.close();
+    for (const ext of ['', '-wal', '-shm']) {
+      fs.rmSync(tmp + ext, { force: true });
+    }
+    throw new Error(
+      'El fichero no es una copia de seguridad válida (' + err.message + ')'
+    );
+  }
+  prueba.close();
+  // Limpiar los ficheros auxiliares WAL del temporal antes de sustituir.
+  for (const ext of ['-wal', '-shm']) {
+    fs.rmSync(tmp + ext, { force: true });
+  }
+
+  // 2. Copia de seguridad automática del estado actual antes de reemplazar.
+  const copiaPrevia = guardarCopiaSeguridad();
+
+  // 3. Cerrar la conexión viva y sustituir la BD de forma atómica.
+  conexion.close();
+  for (const ext of ['-wal', '-shm']) {
+    fs.rmSync(DB_PATH + ext, { force: true });
+  }
+  fs.renameSync(tmp, DB_PATH);
+
+  // 4. Reabrir la conexión sobre la BD restaurada.
+  conexion = abrirConexion();
+
+  return { copiaPrevia };
+}
+
 module.exports = db;
 module.exports.poblarDatosIniciales = poblarDatosIniciales;
 module.exports.seedAdmin = seedAdmin;
+module.exports.serializarBaseDatos = serializarBaseDatos;
+module.exports.guardarCopiaSeguridad = guardarCopiaSeguridad;
+module.exports.reemplazarBaseDatos = reemplazarBaseDatos;
+module.exports.DB_PATH = DB_PATH;
+module.exports.BACKUP_DIR = BACKUP_DIR;

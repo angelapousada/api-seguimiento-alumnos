@@ -52,33 +52,41 @@ router.post('/asignaturas', auth, upload.single('archivo'), (req, res) => {
 
     const resultado = { creados: 0, actualizados: 0, errores: [] };
 
+    const plan = (parsed.titulacion || '').trim();
+
     const buscarStmt = db.prepare(
-      'SELECT id FROM estudiantes WHERE dni = ? OR (dni IS NULL AND nombre = ?)'
+      `SELECT id FROM estudiantes
+       WHERE (? IS NOT NULL AND dni = ?)
+          OR (? IS NOT NULL AND LOWER(correo) = LOWER(?))
+          OR (dni IS NULL AND ? IS NULL AND nombre = ?)`
     );
     const insertarStmt = db.prepare(`
-      INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales, plan)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     const actualizarStmt = db.prepare(`
       UPDATE estudiantes
-      SET nombre = ?, correo = COALESCE(?, correo), movilidad = ?, necesidades_especiales = ?
+      SET nombre = ?, correo = COALESCE(?, correo), movilidad = ?, necesidades_especiales = ?,
+          plan = CASE WHEN ? != '' THEN ? ELSE plan END
       WHERE id = ?
     `);
 
     const insertar = db.transaction(() => {
       parsed.estudiantes.forEach((est, i) => {
         try {
-          const estudiante = buscarStmt.get(est.dni || null, est.nombre || null);
+          const dni = est.dni || null;
+          const correo = est.correo || null;
+          const estudiante = buscarStmt.get(dni, dni, correo, correo, dni, est.nombre || null);
           if (!estudiante) {
             insertarStmt.run(
-              est.dni || null, est.nombre || '', est.correo || null,
-              est.movilidad, est.necesidades_especiales
+              dni, est.nombre || '', correo,
+              est.movilidad, est.necesidades_especiales, plan
             );
             resultado.creados++;
           } else {
             actualizarStmt.run(
-              est.nombre || '', est.correo || null,
-              est.movilidad, est.necesidades_especiales, estudiante.id
+              est.nombre || '', correo,
+              est.movilidad, est.necesidades_especiales, plan, plan, estudiante.id
             );
             resultado.actualizados++;
           }
@@ -260,9 +268,10 @@ router.post('/grupos-mtp', auth, upload.single('archivo'), (req, res) => {
     };
 
     const buscarGrupo = db.prepare('SELECT id FROM grupos WHERE id_asignatura = ? AND tipo = ? AND nombre = ?');
-    const insertGrupo = db.prepare('INSERT INTO grupos (nombre, tipo, id_asignatura, id_profesor, aula) VALUES (?, ?, ?, ?, NULL)');
+    const insertGrupo = db.prepare('INSERT INTO grupos (nombre, tipo, id_asignatura, id_profesor, aula, entregas_activadas) VALUES (?, ?, ?, ?, NULL, ?)');
     const buscarEst = db.prepare('SELECT id FROM estudiantes WHERE dni = ?');
-    const insertEst = db.prepare('INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales) VALUES (?, ?, ?, ?, ?)');
+    const insertEst = db.prepare('INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales, plan) VALUES (?, ?, ?, ?, ?, ?)');
+    const updatePlanEst = db.prepare('UPDATE estudiantes SET plan = ? WHERE id = ?');
     const buscarEA = db.prepare('SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?');
     const insertEA = db.prepare("INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, convocatorias, matriculas, matricula, evaluacion_diferenciada) VALUES (?, ?, ?, ?, 'Si', ?)");
     const buscarEAG = db.prepare('SELECT id FROM estudiantes_asignatura_grupo WHERE id_estudiante_asignatura = ? AND id_grupo = ?');
@@ -272,7 +281,8 @@ router.post('/grupos-mtp', auth, upload.single('archivo'), (req, res) => {
       if (!nombre) return null;
       let g = buscarGrupo.get(idAsignatura, tipo, nombre);
       if (!g) {
-        const r = insertGrupo.run(nombre, tipo, idAsignatura, idProfesor);
+        const r = insertGrupo.run(nombre, tipo, idAsignatura, idProfesor,
+          tipo === 'Laboratorio' ? 1 : 0);
         g = { id: r.lastInsertRowid };
         resultado.grupos_creados++;
       }
@@ -302,7 +312,7 @@ router.post('/grupos-mtp', auth, upload.single('archivo'), (req, res) => {
             if (!dni) continue;
             let est = buscarEst.get(dni);
             if (!est) {
-              const ins = insertEst.run(dni, norm(filas[r][1]), null, 'No', 'No');
+              const ins = insertEst.run(dni, norm(filas[r][1]), null, 'No', 'No', '');
               est = { id: ins.lastInsertRowid };
               resultado.alumnos_creados++;
             }
@@ -313,13 +323,16 @@ router.post('/grupos-mtp', auth, upload.single('archivo'), (req, res) => {
         }
       } else {
         const parsed = parseMatriculados(req.file.path);
+        const plan = (parsed.titulacion || '').trim();
         for (const e of parsed.estudiantes) {
           if (!e.dni && !e.nombre) continue;
           let est = e.dni ? buscarEst.get(e.dni) : null;
           if (!est) {
-            const ins = insertEst.run(e.dni || null, e.nombre || '', e.correo || null, e.movilidad || 'No', e.necesidades_especiales || 'No');
+            const ins = insertEst.run(e.dni || null, e.nombre || '', e.correo || null, e.movilidad || 'No', e.necesidades_especiales || 'No', plan);
             est = { id: ins.lastInsertRowid };
             resultado.alumnos_creados++;
+          } else if (plan) {
+            updatePlanEst.run(plan, est.id);
           }
           let ea = buscarEA.get(est.id, idAsignatura);
           if (!ea) {
@@ -492,6 +505,166 @@ router.post('/asistentes', auth, upload.single('archivo'), (req, res) => {
     console.error(err);
     if (req.file && req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     return res.status(500).json({ error: `Error al procesar el archivo: ${err.message}` });
+  }
+});
+
+// Importa asistencia y entregas de laboratorio desde el libro MTP-Grupos.
+// Cada hoja (PLn/PLIn) es un grupo de laboratorio con dos tablas que comparten
+// las columnas de sesión (0, 1_2, ..., 27_28): arriba asistencia (1=asistió) y
+// más abajo entregas (1=entregada). Solo se importan los grupos que ya tienen
+// sesiones creadas; si el Excel tiene más columnas de sesión que sesiones en la
+// app, se avisa y no se importa ese grupo; si la app tiene más, se rellenan las
+// más antiguas.
+router.post('/asistencia-laboratorio', auth, upload.single('archivo'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Archivo no proporcionado' });
+  const idAsignatura = req.body.id_asignatura;
+  if (!idAsignatura) {
+    fs.unlinkSync(req.file.path);
+    return res.status(400).json({ error: 'Falta id_asignatura' });
+  }
+
+  const norm = (v) => (v == null ? '' : String(v).trim());
+  const esColSesion = (h) => /^\d+(_\d+)?$/.test(norm(h));
+
+  try {
+    const workbook = xlsx.readFile(req.file.path);
+    fs.unlinkSync(req.file.path);
+
+    const resultado = {
+      grupos_procesados: [],
+      sin_grupo: [],
+      sin_sesiones: [],
+      descuadre: [],
+      asistencias_marcadas: 0,
+      entregas_marcadas: 0,
+    };
+
+    const upsertAsistencia = db.prepare(`
+      INSERT INTO asistencia_sesion (id_sesion, id_estudiante_asignatura_grupo, asistencia)
+      VALUES (?, ?, ?)
+      ON CONFLICT(id_sesion, id_estudiante_asignatura_grupo)
+      DO UPDATE SET asistencia = excluded.asistencia
+    `);
+    const upsertEntrega = db.prepare(`
+      INSERT INTO entregas (id_sesion, id_estudiante_asignatura_grupo, entrega, valoracion)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id_sesion, id_estudiante_asignatura_grupo)
+      DO UPDATE SET entrega = excluded.entrega, valoracion = excluded.valoracion
+    `);
+
+    const procesar = db.transaction(() => {
+      for (const sn of workbook.SheetNames) {
+        const nombreGrupo = nombreGrupoDeHoja(sn);
+        if (!nombreGrupo) { resultado.sin_grupo.push(sn); continue; }
+
+        const grupo = db.prepare(
+          "SELECT id FROM grupos WHERE id_asignatura = ? AND tipo = 'Laboratorio' AND nombre = ?"
+        ).get(idAsignatura, nombreGrupo);
+        if (!grupo) { resultado.sin_grupo.push(`${sn} (${nombreGrupo})`); continue; }
+
+        const sesiones = db.prepare(
+          "SELECT id FROM sesiones WHERE id_grupo = ? ORDER BY fecha ASC, COALESCE(hora_inicio,'') ASC"
+        ).all(grupo.id);
+        if (sesiones.length === 0) { resultado.sin_sesiones.push(nombreGrupo); continue; }
+
+        // Mapa DNI -> id_estudiante_asignatura_grupo de los alumnos del grupo.
+        const alumnos = db.prepare(`
+          SELECT e.dni AS dni, eag.id AS eag
+          FROM estudiantes_asignatura_grupo eag
+          JOIN estudiantes_asignatura ea ON ea.id = eag.id_estudiante_asignatura
+          JOIN estudiantes e ON e.id = ea.id_estudiante
+          WHERE eag.id_grupo = ?
+        `).all(grupo.id);
+        const eagPorDni = new Map(alumnos.map((a) => [norm(a.dni), a.eag]));
+
+        const filas = xlsx.utils.sheet_to_json(workbook.Sheets[sn], { header: 1, raw: false, defval: '' });
+
+        // Cabecera de asistencia: primera fila con «DNI» en la columna 0.
+        const idxCabAsis = filas.findIndex((f) => norm(f[0]).toUpperCase() === 'DNI');
+        if (idxCabAsis < 0) { resultado.sin_grupo.push(`${sn} (sin cabecera)`); continue; }
+
+        const cabecera = filas[idxCabAsis];
+        const colsSesion = [];
+        for (let c = 0; c < cabecera.length; c++) {
+          if (esColSesion(cabecera[c])) colsSesion.push(c);
+        }
+
+        if (colsSesion.length > sesiones.length) {
+          resultado.descuadre.push({
+            grupo: nombreGrupo,
+            columnas_excel: colsSesion.length,
+            sesiones_app: sesiones.length,
+          });
+          continue; // no se importa este grupo
+        }
+
+        // Se rellenan las sesiones más antiguas (columna i -> sesión i).
+        const sesionDeCol = (i) => sesiones[i].id;
+
+        let asisGrupo = 0;
+        let entGrupo = 0;
+
+        // --- Asistencia ---
+        const idxEntrega = filas.findIndex(
+          (f) => norm(f[0]).toLowerCase().startsWith('entrega tareas')
+        );
+        const finAsis = idxEntrega > idxCabAsis ? idxEntrega : filas.length;
+        for (let r = idxCabAsis + 1; r < finAsis; r++) {
+          const dni = norm(filas[r][0]);
+          if (!dni) continue;
+          const eag = eagPorDni.get(dni);
+          if (!eag) continue;
+          for (let i = 0; i < colsSesion.length; i++) {
+            const val = norm(filas[r][colsSesion[i]]);
+            const asistio = val === '1' ? 'Si' : 'No';
+            upsertAsistencia.run(sesionDeCol(i), eag, asistio);
+            if (asistio === 'Si') asisGrupo++;
+          }
+        }
+
+        // --- Entregas ---
+        if (idxEntrega >= 0) {
+          const idxCabEnt = filas.findIndex(
+            (f, i) => i > idxEntrega && norm(f[0]).toUpperCase() === 'DNI'
+          );
+          if (idxCabEnt >= 0) {
+            for (let r = idxCabEnt + 1; r < filas.length; r++) {
+              const dni = norm(filas[r][0]);
+              if (!dni) continue;
+              const eag = eagPorDni.get(dni);
+              if (!eag) continue;
+              for (let i = 0; i < colsSesion.length; i++) {
+                const val = norm(filas[r][colsSesion[i]]);
+                if (val === '1') {
+                  // Entregada; Se califica con puntuación máxima (verde).
+                  upsertEntrega.run(sesionDeCol(i), eag, 'Si', 3);
+                  entGrupo++;
+                } else {
+                  upsertEntrega.run(sesionDeCol(i), eag, 'No', 0);
+                }
+              }
+            }
+          }
+        }
+
+        resultado.asistencias_marcadas += asisGrupo;
+        resultado.entregas_marcadas += entGrupo;
+        resultado.grupos_procesados.push({
+          grupo: nombreGrupo,
+          columnas_excel: colsSesion.length,
+          sesiones_app: sesiones.length,
+          asistencias: asisGrupo,
+          entregas: entGrupo,
+        });
+      }
+    });
+
+    procesar();
+    return res.json(resultado);
+  } catch (err) {
+    console.error(err);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    return res.status(500).json({ error: `Error al importar laboratorio: ${err.message}` });
   }
 });
 

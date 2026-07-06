@@ -255,12 +255,14 @@ router.post('/guardar-carga', auth, (req, res) => {
         `).run(fecha_inicio || null, fecha_fin || null, asignatura.id);
       }
 
+      const planStr = (titulacion || '').trim();
       const buscarEst = db.prepare('SELECT id FROM estudiantes WHERE dni = ?');
       const buscarEstSinDni = db.prepare('SELECT id FROM estudiantes WHERE nombre = ? AND dni IS NULL');
       const insertEst = db.prepare(`
-        INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO estudiantes (dni, nombre, correo, movilidad, necesidades_especiales, plan)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
+      const updatePlanEst = db.prepare('UPDATE estudiantes SET plan = ? WHERE id = ?');
       const buscarEA = db.prepare('SELECT id FROM estudiantes_asignatura WHERE id_estudiante = ? AND id_asignatura = ?');
       const insertEA = db.prepare(`
         INSERT INTO estudiantes_asignatura (id_estudiante, id_asignatura, convocatorias, matriculas, matricula, evaluacion_diferenciada)
@@ -270,7 +272,7 @@ router.post('/guardar-carga', auth, (req, res) => {
         'UPDATE estudiantes_asignatura SET convocatorias = ?, matriculas = ?, evaluacion_diferenciada = ? WHERE id = ?'
       );
       const buscarGrupo = db.prepare('SELECT id FROM grupos WHERE id_asignatura = ? AND tipo = ? AND nombre = ?');
-      const insertGrupo = db.prepare('INSERT INTO grupos (nombre, tipo, id_asignatura, id_profesor) VALUES (?, ?, ?, ?)');
+      const insertGrupo = db.prepare('INSERT INTO grupos (nombre, tipo, id_asignatura, id_profesor, entregas_activadas) VALUES (?, ?, ?, ?, ?)');
       const buscarEAG = db.prepare('SELECT id FROM estudiantes_asignatura_grupo WHERE id_estudiante_asignatura = ? AND id_grupo = ?');
       const insertEAG = db.prepare('INSERT INTO estudiantes_asignatura_grupo (id_estudiante_asignatura, id_grupo) VALUES (?, ?)');
 
@@ -278,7 +280,8 @@ router.post('/guardar-carga', auth, (req, res) => {
         if (!nombreGrupo) return null;
         let g = buscarGrupo.get(asignatura.id, tipo, nombreGrupo);
         if (!g) {
-          const r = insertGrupo.run(nombreGrupo, tipo, asignatura.id, idProfesor);
+          const r = insertGrupo.run(nombreGrupo, tipo, asignatura.id, idProfesor,
+            tipo === 'Laboratorio' ? 1 : 0);
           g = { id: r.lastInsertRowid };
         }
         return g.id;
@@ -293,9 +296,11 @@ router.post('/guardar-carga', auth, (req, res) => {
         if (!estudiante) {
           const r = insertEst.run(
             est.dni || null, est.nombre || '', est.correo || null,
-            est.movilidad || 'No', est.necesidades_especiales || 'No'
+            est.movilidad || 'No', est.necesidades_especiales || 'No', planStr
           );
           estudiante = { id: r.lastInsertRowid };
+        } else if (planStr) {
+          updatePlanEst.run(planStr, estudiante.id);
         }
 
         const convocatorias = parseInt(est.convocatorias) || 0;

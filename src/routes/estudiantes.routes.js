@@ -18,7 +18,7 @@ router.get('/buscar', auth, (req, res) => {
       const params = [id_asignatura, termino, termino, termino];
       let sql = `
         SELECT
-          e.id, e.dni, e.nombre, e.correo, e.movilidad, e.necesidades_especiales, e.ruta_imagen,
+          e.id, e.dni, e.nombre, e.correo, e.movilidad, e.necesidades_especiales, e.ruta_imagen, e.plan,
           ea.id AS id_estudiante_asignatura,
           ea.matricula, ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
         FROM estudiantes e
@@ -231,9 +231,21 @@ router.get('/:id/estadisticas', auth, (req, res) => {
 
     const estadisticas = [];
 
+    // Acumuladores por tipo de grupo
+    const porTipoMap = new Map();
+    const ensureTipo = (tipo) => {
+      if (!porTipoMap.has(tipo)) {
+        porTipoMap.set(tipo, {
+          tipo, asisTotal: 0, asisSi: 0,
+          entTotal: 0, entSi: 0, notaSum: 0, entregasActivadas: 0,
+        });
+      }
+      return porTipoMap.get(tipo);
+    };
+
     for (const ea of asignaturas) {
       const grupos = db.prepare(`
-        SELECT g.id, g.nombre, g.tipo
+        SELECT eag.id AS id_eag, g.id, g.nombre, g.tipo, g.entregas_activadas
         FROM estudiantes_asignatura_grupo eag
         JOIN grupos g ON g.id = eag.id_grupo
         WHERE eag.id_estudiante_asignatura = ?
@@ -249,8 +261,11 @@ router.get('/:id/estadisticas', auth, (req, res) => {
 
       let totalEntregas = 0;
       let entregasRealizadas = 0;
+      let sumaNotasEntrega = 0; // nota por entrega: 0=mal/no entregada, 0.5=regular, 1=bien
 
       for (const grupo of grupos) {
+        const acc = ensureTipo(grupo.tipo);
+        if (grupo.entregas_activadas) acc.entregasActivadas = 1;
         const sesionesDelGrupo = db.prepare(`
           SELECT s.id, s.fecha
           FROM sesiones s
@@ -259,26 +274,33 @@ router.get('/:id/estadisticas', auth, (req, res) => {
 
         for (const sesion of sesionesDelGrupo) {
           totalSesiones++;
+          acc.asisTotal++;
           const asistencia = db.prepare(`
             SELECT asistencia, comentario FROM asistencia_sesion
             WHERE id_sesion = ? AND id_estudiante_asignatura_grupo = ?
-          `).get(sesion.id, ea.id_estudiante_asignatura);
+          `).get(sesion.id, grupo.id_eag);
 
           if (asistencia) {
-            if (asistencia.asistencia === 'Si') sesionesAsistidas++;
+            if (asistencia.asistencia === 'Si') { sesionesAsistidas++; acc.asisSi++; }
             if (asistencia.comentario) {
               anotacionesSesiones.push({ fecha: sesion.fecha, comentario: asistencia.comentario });
             }
           }
 
           const entrega = db.prepare(`
-            SELECT entrega, comentario FROM entregas
+            SELECT entrega, valoracion, comentario FROM entregas
             WHERE id_sesion = ? AND id_estudiante_asignatura_grupo = ?
-          `).get(sesion.id, ea.id_estudiante_asignatura);
+          `).get(sesion.id, grupo.id_eag);
 
           if (entrega) {
             totalEntregas++;
-            if (entrega.entrega === 'Si') entregasRealizadas++;
+            acc.entTotal++;
+            if (entrega.entrega === 'Si') {
+              entregasRealizadas++;
+              acc.entSi++;
+              if (entrega.valoracion === 3) { sumaNotasEntrega += 1; acc.notaSum += 1; }
+              else if (entrega.valoracion === 2) { sumaNotasEntrega += 0.5; acc.notaSum += 0.5; }
+            }
           }
         }
 
@@ -291,7 +313,7 @@ router.get('/:id/estadisticas', auth, (req, res) => {
           const asistenciaExamen = db.prepare(`
             SELECT asistencia, comentario FROM asistencia_examen
             WHERE id_examen = ? AND id_estudiante_asignatura_grupo = ?
-          `).get(examen.id, ea.id_estudiante_asignatura);
+          `).get(examen.id, grupo.id_eag);
 
           if (asistenciaExamen) {
             if (asistenciaExamen.asistencia === 'Si') examenesAsistidos++;
@@ -320,7 +342,9 @@ router.get('/:id/estadisticas', auth, (req, res) => {
         entregas: {
           total: totalEntregas,
           realizadas: entregasRealizadas,
-          porcentaje: totalEntregas > 0 ? Math.round((entregasRealizadas / totalEntregas) * 100) : 0
+          porcentaje: totalEntregas > 0 ? Math.round((entregasRealizadas / totalEntregas) * 100) : 0,
+          // Nota media de entregas sobre 10 (0=mal/no entregada, 5=regular, 10=bien).
+          nota: totalEntregas > 0 ? Math.round((sumaNotasEntrega / totalEntregas) * 100) / 10 : 0
         },
         anotaciones: {
           sesiones: anotacionesSesiones,
@@ -329,6 +353,25 @@ router.get('/:id/estadisticas', auth, (req, res) => {
       });
     }
 
+    const ordenTipos = ['Teoría', 'Laboratorio', 'Aula', 'Tutoría Grupal'];
+    const porTipo = [...porTipoMap.values()]
+      .sort((a, b) => ordenTipos.indexOf(a.tipo) - ordenTipos.indexOf(b.tipo))
+      .map((t) => ({
+        tipo: t.tipo,
+        asistencia: {
+          total: t.asisTotal,
+          asistidas: t.asisSi,
+          porcentaje: t.asisTotal > 0 ? Math.round((t.asisSi / t.asisTotal) * 100) : 0,
+        },
+        entregas: {
+          activadas: t.entregasActivadas ? 1 : 0,
+          total: t.entTotal,
+          realizadas: t.entSi,
+          porcentaje: t.entTotal > 0 ? Math.round((t.entSi / t.entTotal) * 100) : 0,
+          nota: t.entTotal > 0 ? Math.round((t.notaSum / t.entTotal) * 100) / 10 : 0,
+        },
+      }));
+
     return res.json({
       estudiante: {
         id: estudiante.id,
@@ -336,11 +379,102 @@ router.get('/:id/estadisticas', auth, (req, res) => {
         dni: estudiante.dni,
         correo: estudiante.correo
       },
-      estadisticas
+      estadisticas,
+      porTipo
     });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error al obtener estadísticas' });
+  }
+});
+
+router.get('/:id/heatmap', auth, (req, res) => {
+  const { id } = req.params;
+  const { id_asignatura } = req.query;
+
+  try {
+    const estudiante = db.prepare('SELECT id FROM estudiantes WHERE id = ?').get(id);
+    if (!estudiante) {
+      return res.status(404).json({ error: 'Estudiante no encontrado' });
+    }
+
+    const filtroAsig = id_asignatura ? ' AND ea.id_asignatura = ?' : '';
+    const params = id_asignatura ? [id, id_asignatura] : [id];
+
+    // Asistencias: una fila por sesión, indicando si se asistió o no
+    const paramsAsis = id_asignatura
+      ? [id, id_asignatura, id, id_asignatura]
+      : [id, id];
+    const asistencias = db.prepare(`
+      SELECT tipo, fecha, hora, hecha AS hechas
+      FROM (
+        SELECT g.tipo AS tipo, s.fecha AS fecha, s.hora_inicio AS hora, s.id AS id_sesion,
+               MAX(CASE WHEN a.asistencia = 'Si' THEN 1 ELSE 0 END) AS hecha
+        FROM estudiantes_asignatura ea
+        JOIN estudiantes_asignatura_grupo eag ON eag.id_estudiante_asignatura = ea.id
+        JOIN grupos g ON g.id = eag.id_grupo
+        JOIN sesiones s ON s.id_grupo = eag.id_grupo
+        LEFT JOIN asistencia_sesion a
+          ON a.id_sesion = s.id AND a.id_estudiante_asignatura_grupo = eag.id
+        WHERE ea.id_estudiante = ?${filtroAsig}
+        GROUP BY s.id
+
+        UNION
+
+        SELECT g.tipo AS tipo, s.fecha AS fecha, s.hora_inicio AS hora, s.id AS id_sesion,
+               CASE WHEN a.asistencia = 'Si' THEN 1 ELSE 0 END AS hecha
+        FROM estudiantes_asignatura ea
+        JOIN estudiantes_asignatura_grupo eag ON eag.id_estudiante_asignatura = ea.id
+        JOIN asistencia_sesion a ON a.id_estudiante_asignatura_grupo = eag.id
+        JOIN sesiones s ON s.id = a.id_sesion
+        JOIN grupos g ON g.id = s.id_grupo
+        WHERE ea.id_estudiante = ?${filtroAsig}
+      )
+      ORDER BY tipo, fecha, hora
+    `).all(...paramsAsis);
+
+    // Entregas: también una fila por sesión, con el nivel del semáforo.
+    const entregas = db.prepare(`
+      SELECT g.tipo AS tipo, s.fecha AS fecha, s.hora_inicio AS hora,
+             SUM(CASE WHEN en.entrega = 'Si' THEN 1 ELSE 0 END) AS hechas,
+             CASE
+               WHEN SUM(CASE WHEN en.entrega = 'Si' AND en.valoracion BETWEEN 1 AND 3 THEN 1 ELSE 0 END) > 0
+                 THEN ROUND(AVG(CASE WHEN en.entrega = 'Si' AND en.valoracion BETWEEN 1 AND 3 THEN en.valoracion END))
+               WHEN SUM(CASE WHEN en.entrega = 'No' THEN 1 ELSE 0 END) > 0
+                 THEN 0
+               ELSE NULL
+             END AS nivel
+      FROM entregas en
+      JOIN sesiones s ON s.id = en.id_sesion
+      JOIN estudiantes_asignatura_grupo eag ON eag.id = en.id_estudiante_asignatura_grupo
+      JOIN grupos g ON g.id = eag.id_grupo
+      JOIN estudiantes_asignatura ea ON ea.id = eag.id_estudiante_asignatura
+      WHERE ea.id_estudiante = ?${filtroAsig}
+      GROUP BY s.id
+      ORDER BY g.tipo, s.fecha, s.hora_inicio
+    `).all(...params);
+
+    // Se agrupa por tipo de grupo, respetando un orden fijo.
+    const ordenTipos = ['Teoría', 'Laboratorio', 'Aula', 'Tutoría Grupal'];
+    const mapa = new Map();
+    const asegurar = (tipo) => {
+      if (!mapa.has(tipo)) mapa.set(tipo, { tipo, asistencias: [], entregas: [] });
+      return mapa.get(tipo);
+    };
+    for (const r of asistencias) {
+      asegurar(r.tipo).asistencias.push({ fecha: r.fecha, hora: r.hora, total: 1, hechas: r.hechas });
+    }
+    for (const r of entregas) {
+      asegurar(r.tipo).entregas.push({ fecha: r.fecha, hora: r.hora, total: 1, hechas: r.hechas, nivel: r.nivel });
+    }
+    const porTipo = [...mapa.values()].sort(
+      (a, b) => ordenTipos.indexOf(a.tipo) - ordenTipos.indexOf(b.tipo)
+    );
+
+    return res.json({ porTipo });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error al obtener el mapa de calor' });
   }
 });
 

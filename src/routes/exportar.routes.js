@@ -5,6 +5,13 @@ const auth = require('../middlewares/auth');
 
 const router = express.Router();
 
+const PREFIJO_GRUPO = {
+  'Teoría': (n) => `Clases Expositivas-${n}`,
+  'Aula': (n) => `Prácticas de Aula/${n}`,
+  'Laboratorio': (n) => `Prácticas de Laboratorio-${n}`,
+  'Tutoría Grupal': (n) => `Tutorías Grupales-${n}`,
+};
+
 router.get('/:id/exportar', auth, (req, res) => {
   const { id } = req.params;
   const { id_grupo } = req.query;
@@ -31,24 +38,20 @@ router.get('/:id/exportar', auth, (req, res) => {
         .all(id);
     }
 
-    const filasResumen = [];
-    const filasAsistencia = [];
-    const filasEntregas = [];
-    const filasValoraciones = [];
-    const filasExamenes = [];
+    const TIPOS_HOJA = [
+      { tipo: 'Teoría', hoja: 'Teoría' },
+      { tipo: 'Aula', hoja: 'Prácticas de Aula' },
+      { tipo: 'Laboratorio', hoja: 'Prácticas de Laboratorio' },
+      { tipo: 'Tutoría Grupal', hoja: 'Tutorías Grupales' },
+    ];
+    const filasPorTipo = {};
+    for (const { tipo } of TIPOS_HOJA) filasPorTipo[tipo] = [];
 
     const stmtEstudiantes = db.prepare(`
       SELECT
         eag.id AS id_eag,
         e.nombre,
-        e.dni,
-        e.correo,
-        e.movilidad,
-        e.necesidades_especiales,
-        ea.matricula,
-        ea.convocatorias,
-        ea.matriculas,
-        ea.evaluacion_diferenciada
+        e.dni
       FROM estudiantes_asignatura_grupo eag
       JOIN estudiantes_asignatura ea ON ea.id = eag.id_estudiante_asignatura
       JOIN estudiantes e ON e.id = ea.id_estudiante
@@ -58,9 +61,6 @@ router.get('/:id/exportar', auth, (req, res) => {
 
     const stmtSesiones = db.prepare(
       'SELECT * FROM sesiones WHERE id_grupo = ? ORDER BY fecha, hora_inicio'
-    );
-    const stmtExamenes = db.prepare(
-      'SELECT * FROM examenes WHERE id_grupo = ? ORDER BY fecha, hora_inicio'
     );
     const stmtAsistencia = db.prepare(
       'SELECT * FROM asistencia_sesion WHERE id_sesion = ? AND id_estudiante_asignatura_grupo = ?'
@@ -74,118 +74,45 @@ router.get('/:id/exportar', auth, (req, res) => {
     const stmtValoracion = db.prepare(
       'SELECT * FROM valoraciones WHERE id_concepto = ? AND id_estudiante_asignatura_grupo = ?'
     );
-    const stmtAsistenciaExamen = db.prepare(
-      'SELECT * FROM asistencia_examen WHERE id_examen = ? AND id_estudiante_asignatura_grupo = ?'
-    );
 
     for (const grupo of grupos) {
       const estudiantes = stmtEstudiantes.all(grupo.id);
       const sesiones = stmtSesiones.all(grupo.id);
-      const examenes = stmtExamenes.all(grupo.id);
+      const destino = filasPorTipo[grupo.tipo] || (filasPorTipo[grupo.tipo] = []);
 
       for (const est of estudiantes) {
-        let sesionesAsistidas = 0;
-        let totalEntregas = 0;
-        let entregasRealizadas = 0;
-        let sumaValoraciones = 0;
-        let numValoraciones = 0;
-        let examenesAsistidos = 0;
-
         for (const sesion of sesiones) {
           const asistencia = stmtAsistencia.get(sesion.id, est.id_eag);
-          if (asistencia && asistencia.asistencia === 'Si') sesionesAsistidas++;
-
-          filasAsistencia.push({
-            'Grupo': grupo.nombre,
-            'Tipo': grupo.tipo,
-            'Estudiante': est.nombre,
-            'DNI': est.dni,
-            'Fecha': sesion.fecha,
-            'Hora': sesion.hora_inicio || '',
-            'Asistencia': asistencia ? asistencia.asistencia : 'No',
-          });
-
           const entrega = stmtEntrega.get(sesion.id, est.id_eag);
-          if (entrega) {
-            totalEntregas++;
-            if (entrega.entrega === 'Si') entregasRealizadas++;
-            filasEntregas.push({
-              'Grupo': grupo.nombre,
-              'Tipo': grupo.tipo,
-              'Estudiante': est.nombre,
-              'DNI': est.dni,
-              'Fecha sesión': sesion.fecha,
-              'Entrega': entrega.entrega,
-              'Valoración': entrega.valoracion ?? '',
-              'Comentario': entrega.comentario || '',
-            });
-          }
 
+          const conceptosTxt = [];
+          const comentariosTxt = [];
           for (const concepto of stmtConceptos.all(sesion.id)) {
             const valoracion = stmtValoracion.get(concepto.id, est.id_eag);
-            if (valoracion) {
-              if (valoracion.valoracion != null) {
-                sumaValoraciones += valoracion.valoracion;
-                numValoraciones++;
-              }
-              filasValoraciones.push({
-                'Grupo': grupo.nombre,
-                'Tipo': grupo.tipo,
-                'Estudiante': est.nombre,
-                'DNI': est.dni,
-                'Fecha sesión': sesion.fecha,
-                'Concepto': concepto.descripcion,
-                'Valoración': valoracion.valoracion ?? '',
-                'Comentario': valoracion.comentario || '',
-              });
+            if (!valoracion) continue;
+            conceptosTxt.push(
+              valoracion.valoracion != null
+                ? `${concepto.descripcion}: ${valoracion.valoracion}`
+                : concepto.descripcion
+            );
+            if (valoracion.comentario) {
+              comentariosTxt.push(`${concepto.descripcion}: ${valoracion.comentario}`);
             }
           }
-        }
 
-        for (const examen of examenes) {
-          const asistenciaExamen = stmtAsistenciaExamen.get(examen.id, est.id_eag);
-          if (asistenciaExamen && asistenciaExamen.asistencia === 'Si') {
-            examenesAsistidos++;
-          }
-          filasExamenes.push({
-            'Grupo': grupo.nombre,
-            'Tipo': grupo.tipo,
+          destino.push({
             'Estudiante': est.nombre,
             'DNI': est.dni,
-            'Examen': examen.nombre,
-            'Fecha': examen.fecha,
-            'Asistencia': asistenciaExamen ? asistenciaExamen.asistencia : 'No',
-            'Comentario': (asistenciaExamen && asistenciaExamen.comentario) || '',
+            'Grupo': grupo.nombre,
+            'Asistencia': asistencia ? asistencia.asistencia : 'No',
+            'Entrega': entrega ? entrega.entrega : '',
+            'Comentario entrega': entrega ? (entrega.comentario || '') : '',
+            'Conceptos a evaluar': conceptosTxt.join('; '),
+            'Comentario conceptos': comentariosTxt.join('; '),
+            'Fecha': sesion.fecha,
+            'Hora': sesion.hora_inicio || '',
           });
         }
-
-        const totalSesiones = sesiones.length;
-        filasResumen.push({
-          'Grupo': grupo.nombre,
-          'Tipo': grupo.tipo,
-          'Estudiante': est.nombre,
-          'DNI': est.dni,
-          'Correo': est.correo || '',
-          'Matrícula': est.matricula,
-          'Movilidad': est.movilidad || 'No',
-          'Evaluación diferenciada': est.evaluacion_diferenciada || 'No',
-          'Necesidades educativas especiales': est.necesidades_especiales || 'No',
-          'Sesiones asistidas': sesionesAsistidas,
-          'Total sesiones': totalSesiones,
-          '% Asistencia': totalSesiones > 0
-            ? Math.round((sesionesAsistidas / totalSesiones) * 100)
-            : 0,
-          'Entregas realizadas': entregasRealizadas,
-          'Total entregas': totalEntregas,
-          '% Entregas': totalEntregas > 0
-            ? Math.round((entregasRealizadas / totalEntregas) * 100)
-            : 0,
-          'Exámenes asistidos': examenesAsistidos,
-          'Total exámenes': examenes.length,
-          'Valoración media': numValoraciones > 0
-            ? Math.round((sumaValoraciones / numValoraciones) * 100) / 100
-            : '',
-        });
       }
     }
 
@@ -197,7 +124,7 @@ router.get('/:id/exportar', auth, (req, res) => {
     const alumnos = id_grupo
       ? db.prepare(`
           SELECT DISTINCT ea.id AS id_ea, e.dni, e.nombre, e.correo, e.movilidad,
-                 ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
+                 e.plan, ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
           FROM estudiantes_asignatura_grupo eag
           JOIN estudiantes_asignatura ea ON ea.id = eag.id_estudiante_asignatura
           JOIN estudiantes e ON e.id = ea.id_estudiante
@@ -205,7 +132,7 @@ router.get('/:id/exportar', auth, (req, res) => {
         `).all(id_grupo)
       : db.prepare(`
           SELECT ea.id AS id_ea, e.dni, e.nombre, e.correo, e.movilidad,
-                 ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
+                 e.plan, ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
           FROM estudiantes_asignatura ea
           JOIN estudiantes e ON e.id = ea.id_estudiante
           WHERE ea.id_asignatura = ? ORDER BY e.nombre
@@ -215,33 +142,34 @@ router.get('/:id/exportar', auth, (req, res) => {
       JOIN grupos g ON g.id = eag.id_grupo
       WHERE eag.id_estudiante_asignatura = ?
     `);
-    const filasAlumnos = [
-      ['LISTADO DE ALUMNOS MATRICULADOS'],
-      [],
-      ['', 'Plan:', titulacion ? titulacion.nombre : ''],
-      [],
-      ['', 'Asignatura:', asignatura.nombre],
-      [],
-      ['', 'Curso Académico:', ''],
-      [],
-      ['Nº', 'DNI', 'Alumno', 'Email', 'Convocatorias', 'Matrículas',
+    const nombreGrado = titulacion ? titulacion.nombre : '';
+    const filasResumen = [
+      ['DNI', 'Alumno', 'Email', 'Grado', 'Convocatorias', 'Matrículas',
         'Evalución Diferenciada', 'Movilidad Erasmus', 'Clases Expositivas',
         'Prácticas de Aula/Semina', 'Prácticas de Laboratorio', 'Tutorías Grupales'],
     ];
-    alumnos.forEach((a, i) => {
+    const soloGrupo = id_grupo ? grupos[0] : null;
+    alumnos.forEach((a) => {
       const g = { 'Teoría': '', 'Aula': '', 'Laboratorio': '', 'Tutoría Grupal': '' };
-      for (const row of stmtGruposAlumno.all(a.id_ea)) {
-        if (row.tipo in g) g[row.tipo] = row.nombre;
+      if (soloGrupo) {
+        g[soloGrupo.tipo] = soloGrupo.nombre;
+      } else {
+        for (const row of stmtGruposAlumno.all(a.id_ea)) {
+          if (row.tipo in g) g[row.tipo] = row.nombre;
+        }
       }
-      filasAlumnos.push([
-        i + 1, a.dni || '', a.nombre || '', a.correo || '',
+      const etiqueta = (tipo) =>
+        g[tipo] ? PREFIJO_GRUPO[tipo](g[tipo]) : '';
+      filasResumen.push([
+        a.dni || '', a.nombre || '', a.correo || '', a.plan || nombreGrado,
         a.convocatorias ?? '', a.matriculas ?? '',
         a.evaluacion_diferenciada || 'No', a.movilidad || 'No',
-        g['Teoría'], g['Aula'], g['Laboratorio'], g['Tutoría Grupal'],
+        etiqueta('Teoría'), etiqueta('Aula'),
+        etiqueta('Laboratorio'), etiqueta('Tutoría Grupal'),
       ]);
     });
-    const hojaAlumnos = XLSX.utils.aoa_to_sheet(filasAlumnos);
-    XLSX.utils.book_append_sheet(workbook, hojaAlumnos, 'Alumnos');
+    const hojaResumen = XLSX.utils.aoa_to_sheet(filasResumen);
+    XLSX.utils.book_append_sheet(workbook, hojaResumen, 'Resumen');
 
     const agregarHoja = (nombre, filas, columnas) => {
       const hoja = filas.length > 0
@@ -254,33 +182,34 @@ router.get('/:id/exportar', auth, (req, res) => {
       XLSX.utils.book_append_sheet(workbook, hoja, nombre);
     };
 
-    agregarHoja('Resumen', filasResumen, [
-      'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Correo', 'Matrícula',
-      'Movilidad', 'Evaluación diferenciada', 'Necesidades educativas especiales',
-      'Sesiones asistidas', 'Total sesiones', '% Asistencia',
-      'Entregas realizadas', 'Total entregas', '% Entregas',
-      'Exámenes asistidos', 'Total exámenes', 'Valoración media',
-    ]);
-    agregarHoja('Asistencia', filasAsistencia, [
-      'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Fecha', 'Hora', 'Asistencia',
-    ]);
-    agregarHoja('Entregas', filasEntregas, [
-      'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Fecha sesión', 'Entrega', 'Valoración', 'Comentario',
-    ]);
-    agregarHoja('Conceptos a evaluar', filasValoraciones, [
-      'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Fecha sesión', 'Concepto', 'Valoración', 'Comentario',
-    ]);
-    agregarHoja('Exámenes', filasExamenes, [
-      'Grupo', 'Tipo', 'Estudiante', 'DNI', 'Examen', 'Fecha', 'Asistencia', 'Comentario',
-    ]);
+    const COLUMNAS_TIPO = [
+      'Estudiante', 'DNI', 'Grupo', 'Asistencia', 'Entrega', 'Comentario entrega',
+      'Conceptos a evaluar', 'Comentario conceptos', 'Fecha', 'Hora',
+    ];
+    for (const { tipo, hoja } of TIPOS_HOJA) {
+      if (id_grupo && !grupos.some((g) => g.tipo === tipo)) continue;
+      agregarHoja(hoja, filasPorTipo[tipo], COLUMNAS_TIPO);
+    }
 
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 
     const limpiar = (texto) =>
       String(texto).normalize('NFD').replace(/[̀-ͯ]/g, '')
         .replace(/[^a-zA-Z0-9_-]+/g, '_');
-    const sufijo = id_grupo ? `_${limpiar(grupos[0].nombre)}` : '';
-    const nombreFichero = `seguimiento_${limpiar(asignatura.codigo)}${sufijo}.xlsx`;
+    const NOMBRE_TIPO = {
+      'Teoría': 'teoria',
+      'Aula': 'practicas-aula',
+      'Laboratorio': 'practicas-laboratorio',
+      'Tutoría Grupal': 'tutorias-grupales',
+    };
+    let nombreFichero;
+    if (id_grupo) {
+      const g = grupos[0];
+      const base = NOMBRE_TIPO[g.tipo] || limpiar(g.tipo);
+      nombreFichero = `${base}-${limpiar(g.nombre)}.xlsx`;
+    } else {
+      nombreFichero = `seguimiento_${limpiar(asignatura.codigo)}.xlsx`;
+    }
 
     res.setHeader(
       'Content-Type',
