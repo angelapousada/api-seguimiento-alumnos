@@ -44,8 +44,6 @@ db.exec(`
     usuario TEXT UNIQUE NOT NULL,
     contrasena TEXT NOT NULL,
     rol INTEGER DEFAULT 1,
-    ids_asignatura TEXT DEFAULT '[]',
-    nombres_asignatura TEXT DEFAULT '[]',
     idioma TEXT DEFAULT 'es',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -66,6 +64,15 @@ db.exec(`
     fecha_inicio TEXT,
     fecha_fin TEXT,
     FOREIGN KEY (id_titulacion) REFERENCES titulaciones(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS usuarios_asignatura (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_usuario INTEGER NOT NULL,
+    id_asignatura INTEGER NOT NULL,
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id) ON DELETE CASCADE,
+    FOREIGN KEY (id_asignatura) REFERENCES catalogo_asignaturas(id) ON DELETE CASCADE,
+    UNIQUE(id_usuario, id_asignatura)
   );
 
   CREATE TABLE IF NOT EXISTS grupos (
@@ -219,6 +226,45 @@ ensureColumn('usuarios', 'ruta_imagen', "TEXT DEFAULT 'Sin asignar'");
 ensureColumn('grupos', 'entregas_activadas', 'INTEGER DEFAULT 0');
 db.prepare("UPDATE grupos SET entregas_activadas = 1 WHERE tipo = 'Laboratorio'").run();
 
+// Migración: traslada la relación profesor-asignatura, antes desnormalizada en
+// las columnas usuarios.ids_asignatura/nombres_asignatura, a la tabla
+// intermedia usuarios_asignatura.
+function migrarUsuariosAsignatura() {
+  const cols = db.prepare('PRAGMA table_info(usuarios)').all();
+  if (!cols.some((c) => c.name === 'ids_asignatura')) return;
+
+  const existeAsignatura = db.prepare('SELECT 1 FROM catalogo_asignaturas WHERE id = ?');
+  const insertar = db.prepare(
+    'INSERT OR IGNORE INTO usuarios_asignatura (id_usuario, id_asignatura) VALUES (?, ?)'
+  );
+
+  const migrar = db.transaction(() => {
+    for (const u of db.prepare('SELECT id, ids_asignatura FROM usuarios').all()) {
+      let ids = [];
+      try {
+        ids = JSON.parse(u.ids_asignatura || '[]');
+      } catch (_) {
+        ids = [];
+      }
+      for (const x of ids) {
+        const n = Number(x);
+        // Se descartan los identificadores que ya no existen en el catálogo
+        // para no violar la clave foránea.
+        if (!Number.isNaN(n) && existeAsignatura.get(n)) {
+          insertar.run(u.id, n);
+        }
+      }
+    }
+    db.exec('ALTER TABLE usuarios DROP COLUMN ids_asignatura');
+    db.exec('ALTER TABLE usuarios DROP COLUMN nombres_asignatura');
+  });
+
+  migrar();
+  console.log('[DB] Relación profesor-asignatura migrada a usuarios_asignatura');
+}
+
+migrarUsuariosAsignatura();
+
 function poblarDatosIniciales() {
   const existing = db.prepare('SELECT COUNT(*) as cnt FROM titulaciones').get();
   if (existing.cnt > 0) return;
@@ -363,6 +409,29 @@ function serializarBaseDatos() {
   return conexion.serialize();
 }
 
+function serializarBaseDatosSinImagenes() {
+  const tmp = DB_PATH + '.sinimg';
+  fs.writeFileSync(tmp, serializarBaseDatos());
+  const copia = new Database(tmp);
+  try {
+    copia.exec(`
+      UPDATE estudiantes SET ruta_imagen = 'Sin asignar';
+      UPDATE usuarios SET ruta_imagen = 'Sin asignar';
+    `);
+    copia.pragma('wal_checkpoint(TRUNCATE)');
+    return copia.serialize();
+  } finally {
+    copia.close();
+    for (const ext of ['', '-wal', '-shm']) {
+      try {
+        fs.unlinkSync(tmp + ext);
+      } catch (_) {
+        /* el fichero puede no existir */
+      }
+    }
+  }
+}
+
 // Guarda una copia de seguridad del estado actual en BACKUP_DIR y devuelve la
 // ruta del fichero generado.
 function guardarCopiaSeguridad(sello) {
@@ -430,6 +499,7 @@ module.exports = db;
 module.exports.poblarDatosIniciales = poblarDatosIniciales;
 module.exports.seedAdmin = seedAdmin;
 module.exports.serializarBaseDatos = serializarBaseDatos;
+module.exports.serializarBaseDatosSinImagenes = serializarBaseDatosSinImagenes;
 module.exports.guardarCopiaSeguridad = guardarCopiaSeguridad;
 module.exports.reemplazarBaseDatos = reemplazarBaseDatos;
 module.exports.DB_PATH = DB_PATH;

@@ -364,13 +364,32 @@ router.post('/grupos-mtp', auth, upload.single('archivo'), (req, res) => {
     return res.status(500).json({ error: `Error al procesar el archivo: ${err.message}` });
   }
 });
+const PATRONES_ACTIVIDAD = [
+  {
+    tipo: 'Teoría',
+    // p. ej. «CEX-A» → grupo «A»
+    regex: /CEX-(.+?)(?:\s+-\s+|$)/i,
+    formato: 'CEX-<grupo>',
+    // El nombre del grupo es tal cual el texto tras «CEX-».
+    nombre: (m) => m[1].trim(),
+  },
+  {
+    tipo: 'Aula',
+    // p. ej. «PAS-1» → grupo «Semin-1»
+    regex: /PAS-(.+?)(?:\s+-\s+|$)/i,
+    formato: 'PAS-<grupo>',
+    nombre: (m) => `Semin-${m[1].trim()}`,
+  },
+];
+
+const FORMATOS_ACTIVIDAD = PATRONES_ACTIVIDAD.map((p) => `${p.formato} (${p.tipo})`);
 
 const grupoDeActividad = (actividad) => {
-  const s = String(actividad || '');
-  let m = s.match(/CEX-(.+?)(?:\s+-\s+|$)/i);
-  if (m) return { tipo: 'Teoría', nombre: m[1].trim() };
-  m = s.match(/PAS-(.+?)(?:\s+-\s+|$)/i);
-  if (m) return { tipo: 'Aula', nombre: `Semin-${m[1].trim()}` };
+  const s = String(actividad || '').trim();
+  for (const p of PATRONES_ACTIVIDAD) {
+    const m = s.match(p.regex);
+    if (m && m[1].trim()) return { tipo: p.tipo, nombre: p.nombre(m) };
+  }
   return null;
 };
 
@@ -425,6 +444,16 @@ router.post('/asistentes', auth, upload.single('archivo'), (req, res) => {
       alumno_no_encontrado: 0,
       grupo_no_encontrado: 0,
       alumno_no_en_grupo: 0,
+      formatos_esperados: FORMATOS_ACTIVIDAD,
+      incidencias: [],
+    };
+
+    const incidenciasVistas = new Set();
+    const registrarIncidencia = (fecha, incidencia) => {
+      const clave = `${fecha}||${incidencia}`;
+      if (incidenciasVistas.has(clave)) return;
+      incidenciasVistas.add(clave);
+      resultado.incidencias.push({ fecha: fecha || '(sin fecha)', incidencia });
     };
 
     const buscarEst = db.prepare('SELECT id FROM estudiantes WHERE LOWER(correo) = LOWER(?)');
@@ -456,22 +485,44 @@ router.post('/asistentes', auth, upload.single('archivo'), (req, res) => {
         const usuario = norm(fila[cU]);
         if (!usuario) continue;
 
+        const rawFecha = norm(fila[cF]);
+        const fechaDia = (rawFecha.match(/^\d{2}-\d{2}-\d{4}/) || [rawFecha])[0];
+
         const grupoAct = grupoDeActividad(fila[cA]);
         if (!grupoAct) {
           resultado.ignorados_actividad_generica++;
+          const actividad = norm(fila[cA]);
+          registrarIncidencia(
+            fechaDia,
+            `Actividad no reconocida${actividad ? `: "${actividad}"` : ''}. ` +
+              `Formato esperado: ${FORMATOS_ACTIVIDAD.join(' o ')}`
+          );
           continue;
         }
         const fecha = fechaFichajeAISO(fila[cF]);
-        if (!fecha) continue;
+        if (!fecha) {
+          registrarIncidencia(fechaDia, 'Fecha no reconocida');
+          continue;
+        }
 
         const grupo = buscarGrupo.get(idAsignatura, grupoAct.tipo, grupoAct.nombre);
         if (!grupo) {
           resultado.grupo_no_encontrado++;
+          registrarIncidencia(
+            fechaDia,
+            `Grupo no encontrado: ${grupoAct.tipo} ${grupoAct.nombre}`
+          );
           continue;
         }
         const { hora_inicio, hora_fin, aula } = parseHorario(fila[cH]);
         let sesion = buscarSesion.get(grupo.id, fecha, hora_inicio || '');
         if (!sesion) {
+          if (!hora_inicio || !hora_fin) {
+            registrarIncidencia(fechaDia, `Falta horario (grupo ${grupoAct.nombre})`);
+          }
+          if (!aula) {
+            registrarIncidencia(fechaDia, `Falta aula (grupo ${grupoAct.nombre})`);
+          }
           const ins = insertSesion.run(
             fecha,
             hora_inicio,
@@ -487,11 +538,16 @@ router.post('/asistentes', auth, upload.single('archivo'), (req, res) => {
         const est = buscarEst.get(`${usuario}@uniovi.es`);
         if (!est) {
           resultado.alumno_no_encontrado++;
+          registrarIncidencia(fechaDia, `Alumno no encontrado: ${usuario}`);
           continue;
         }
         const eag = buscarEAG.get(est.id, idAsignatura, grupo.id);
         if (!eag) {
           resultado.alumno_no_en_grupo++;
+          registrarIncidencia(
+            fechaDia,
+            `El alumno ${usuario} no pertenece al grupo ${grupoAct.nombre}`
+          );
           continue;
         }
         marcarAsistencia.run(sesion.id, eag.id);
@@ -508,7 +564,7 @@ router.post('/asistentes', auth, upload.single('archivo'), (req, res) => {
   }
 });
 
-// Importa asistencia y entregas de laboratorio desde el libro MTP-Grupos.
+// Importa asistencia y entregas de laboratorio desde el libro ejemplo MTP-Grupos.
 // Cada hoja (PLn/PLIn) es un grupo de laboratorio con dos tablas que comparten
 // las columnas de sesión (0, 1_2, ..., 27_28): arriba asistencia (1=asistió) y
 // más abajo entregas (1=entregada). Solo se importan los grupos que ya tienen

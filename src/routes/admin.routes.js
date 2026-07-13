@@ -1,5 +1,8 @@
 const express = require('express');
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const AdmZip = require('adm-zip');
 const db = require('../config/db');
 const {
   poblarDatosIniciales,
@@ -11,6 +14,10 @@ const auth = require('../middlewares/auth');
 const isAdmin = require('../middlewares/isAdmin');
 
 const router = express.Router();
+
+const PERFILES_DIR = path.join(__dirname, '../../uploads/perfiles');
+const DB_ENTRY = 'seguimiento.db';
+const IMG_PREFIX = 'perfiles/';
 
 const uploadBackup = multer({
   storage: multer.memoryStorage(),
@@ -81,38 +88,84 @@ router.post('/vaciar-parcial', auth, isAdmin, (req, res) => {
   }
 });
 
-// Descarga una copia de seguridad de la base de datos actual.
 router.get('/backup', auth, isAdmin, (req, res) => {
   try {
-    const buffer = serializarBaseDatos();
+    const zip = new AdmZip();
+    zip.addFile(DB_ENTRY, serializarBaseDatos());
+
+    if (fs.existsSync(PERFILES_DIR)) {
+      for (const nombre of fs.readdirSync(PERFILES_DIR)) {
+        const ruta = path.join(PERFILES_DIR, nombre);
+        if (fs.statSync(ruta).isFile()) {
+          zip.addLocalFile(ruta, 'perfiles');
+        }
+      }
+    }
+
     const marca = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="backup_seguimiento_${marca}.db"`
+      `attachment; filename="backup_seguimiento_${marca}.zip"`
     );
-    return res.send(buffer);
+    return res.send(zip.toBuffer());
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error al generar la copia de seguridad' });
   }
 });
 
-// Restaura la base de datos a partir de un fichero de copia previo. En una sola
-// operación guarda una copia del estado actual y reemplaza la BD por la subida.
+const esZip = (buf) =>
+  buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
+
+function restaurarImagenesDeZip(zip) {
+  let restauradas = 0;
+  if (!fs.existsSync(PERFILES_DIR)) {
+    fs.mkdirSync(PERFILES_DIR, { recursive: true });
+  }
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue;
+    if (!entry.entryName.startsWith(IMG_PREFIX)) continue;
+    // Solo el nombre de fichero
+    const base = path.basename(entry.entryName);
+    if (!base) continue;
+    fs.writeFileSync(path.join(PERFILES_DIR, base), entry.getData());
+    restauradas++;
+  }
+  return restauradas;
+}
+
 router.post('/restaurar', auth, isAdmin, uploadBackup.single('archivo'), (req, res) => {
   if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
     return res.status(400).json({ error: 'No se ha recibido ningún fichero' });
   }
 
   try {
-    const { copiaPrevia } = reemplazarBaseDatos(req.file.buffer);
+    let dbBuffer = req.file.buffer;
+    let imagenesRestauradas = 0;
+
+    if (esZip(req.file.buffer)) {
+      const zip = new AdmZip(req.file.buffer);
+      const entradaDb =
+        zip.getEntry(DB_ENTRY) ||
+        zip.getEntries().find((e) => !e.isDirectory && e.entryName.toLowerCase().endsWith('.db'));
+      if (!entradaDb) {
+        return res.status(400).json({
+          error: 'El ZIP no contiene ninguna base de datos (.db)',
+        });
+      }
+      dbBuffer = entradaDb.getData();
+      imagenesRestauradas = restaurarImagenesDeZip(zip);
+    }
+
+    const { copiaPrevia } = reemplazarBaseDatos(dbBuffer);
     // Garantizamos que el catálogo y el admin existan tras la restauración.
     poblarDatosIniciales();
     seedAdmin();
     return res.json({
       mensaje: 'Base de datos restaurada correctamente',
       copiaPrevia,
+      imagenes_restauradas: imagenesRestauradas,
     });
   } catch (err) {
     console.error(err);

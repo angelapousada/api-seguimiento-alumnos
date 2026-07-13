@@ -26,11 +26,33 @@ const uploadImagenPerfil = multer({
   },
 });
 
-function parseJSON(value) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return [];
+function asignaturasDeUsuario(idUsuario) {
+  const filas = db
+    .prepare(
+      `SELECT ca.id, ca.nombre
+       FROM usuarios_asignatura ua
+       JOIN catalogo_asignaturas ca ON ca.id = ua.id_asignatura
+       WHERE ua.id_usuario = ?
+       ORDER BY ca.id`
+    )
+    .all(idUsuario);
+  return {
+    ids_asignatura: filas.map((f) => f.id),
+    nombres_asignatura: filas.map((f) => f.nombre),
+  };
+}
+
+function reemplazarAsignaturasUsuario(idUsuario, ids) {
+  db.prepare('DELETE FROM usuarios_asignatura WHERE id_usuario = ?').run(idUsuario);
+  const existe = db.prepare('SELECT 1 FROM catalogo_asignaturas WHERE id = ?');
+  const insertar = db.prepare(
+    'INSERT OR IGNORE INTO usuarios_asignatura (id_usuario, id_asignatura) VALUES (?, ?)'
+  );
+  for (const x of Array.isArray(ids) ? ids : []) {
+    const n = Number(x);
+    if (!Number.isNaN(n) && existe.get(n)) {
+      insertar.run(idUsuario, n);
+    }
   }
 }
 
@@ -42,8 +64,7 @@ function formatUsuario(u) {
     correo: u.correo,
     usuario: u.usuario,
     rol: u.rol,
-    ids_asignatura: parseJSON(u.ids_asignatura),
-    nombres_asignatura: parseJSON(u.nombres_asignatura),
+    ...asignaturasDeUsuario(u.id),
     idioma: u.idioma,
     ruta_imagen: u.ruta_imagen,
     created_at: u.created_at,
@@ -61,7 +82,7 @@ router.get('/', auth, isAdmin, (req, res) => {
 });
 
 router.post('/', auth, isAdmin, async (req, res) => {
-  const { nombre, apellidos, correo, contrasena, rol, ids_asignatura, nombres_asignatura } = req.body;
+  const { nombre, apellidos, correo, contrasena, rol, ids_asignatura } = req.body;
 
   if (!nombre || !correo || !contrasena) {
     return res.status(400).json({ error: 'nombre, correo y contrasena son obligatorios' });
@@ -71,26 +92,21 @@ router.post('/', auth, isAdmin, async (req, res) => {
     const hash = await bcrypt.hash(contrasena, 10);
     const usuarioLogin = correo.split('@')[0];
     const rolInt = rol !== undefined ? parseInt(rol, 10) : 1;
-    const idsJSON = JSON.stringify(Array.isArray(ids_asignatura) ? ids_asignatura : []);
-    const nombresJSON = JSON.stringify(Array.isArray(nombres_asignatura) ? nombres_asignatura : []);
 
-    const stmt = db.prepare(`
-      INSERT INTO usuarios (nombre, apellidos, correo, usuario, contrasena, rol, ids_asignatura, nombres_asignatura)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const crear = db.transaction(() => {
+      const result = db
+        .prepare(`
+          INSERT INTO usuarios (nombre, apellidos, correo, usuario, contrasena, rol)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .run(nombre, apellidos || '', correo, usuarioLogin, hash, rolInt);
+      const idNuevo = result.lastInsertRowid;
+      reemplazarAsignaturasUsuario(idNuevo, ids_asignatura);
+      return idNuevo;
+    });
 
-    const result = stmt.run(
-      nombre,
-      apellidos || '',
-      correo,
-      usuarioLogin,
-      hash,
-      rolInt,
-      idsJSON,
-      nombresJSON
-    );
-
-    const nuevo = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(result.lastInsertRowid);
+    const idNuevo = crear();
+    const nuevo = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(idNuevo);
     return res.status(201).json(formatUsuario(nuevo));
   } catch (err) {
     console.error(err);
@@ -103,7 +119,7 @@ router.post('/', auth, isAdmin, async (req, res) => {
 
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
-  const { nombre, apellidos, idioma, ids_asignatura, nombres_asignatura, rol } = req.body;
+  const { nombre, apellidos, idioma, correo, contrasena, ids_asignatura, rol } = req.body;
 
   try {
     const usuario = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
@@ -135,49 +151,49 @@ router.put('/:id', auth, (req, res) => {
       rolFinal = rolInt;
     }
 
-    let idsJSON;
-    let nombresJSON;
-    if (ids_asignatura !== undefined) {
-      const idsArr = Array.isArray(ids_asignatura) ? ids_asignatura : [];
-      idsJSON = JSON.stringify(idsArr);
-      if (idsArr.length === 0) {
-        nombresJSON = JSON.stringify([]);
-      } else {
-        const placeholders = idsArr.map(() => '?').join(',');
-        const filas = db
-          .prepare(
-            `SELECT id, nombre FROM catalogo_asignaturas WHERE id IN (${placeholders})`
-          )
-          .all(...idsArr);
-        const porId = new Map(filas.map((r) => [String(r.id), r.nombre]));
-        nombresJSON = JSON.stringify(
-          idsArr.map((x) => porId.get(String(x)) ?? String(x))
+    const correoFinal =
+      correo !== undefined && req.user.rol === 0 ? correo : usuario.correo;
+
+    const puedeCambiarContrasena =
+      String(req.user.id) === String(id) || req.user.rol === 0;
+    const hashContrasena =
+      contrasena !== undefined &&
+      String(contrasena).length > 0 &&
+      puedeCambiarContrasena
+        ? bcrypt.hashSync(String(contrasena), 10)
+        : null;
+
+    const actualizar = db.transaction(() => {
+      db.prepare(`
+        UPDATE usuarios
+        SET nombre = ?, apellidos = ?, correo = ?, idioma = ?, rol = ?
+        WHERE id = ?
+      `).run(
+        nombre !== undefined ? nombre : usuario.nombre,
+        apellidos !== undefined ? apellidos : usuario.apellidos,
+        correoFinal,
+        idioma !== undefined ? idioma : usuario.idioma,
+        rolFinal,
+        id
+      );
+      if (ids_asignatura !== undefined && req.user.rol === 0) {
+        reemplazarAsignaturasUsuario(id, ids_asignatura);
+      }
+      if (hashContrasena) {
+        db.prepare('UPDATE usuarios SET contrasena = ? WHERE id = ?').run(
+          hashContrasena,
+          id
         );
       }
-    } else {
-      idsJSON = usuario.ids_asignatura;
-      nombresJSON = nombres_asignatura !== undefined
-        ? JSON.stringify(Array.isArray(nombres_asignatura) ? nombres_asignatura : [])
-        : usuario.nombres_asignatura;
-    }
-
-    db.prepare(`
-      UPDATE usuarios
-      SET nombre = ?, apellidos = ?, idioma = ?, ids_asignatura = ?, nombres_asignatura = ?, rol = ?
-      WHERE id = ?
-    `).run(
-      nombre !== undefined ? nombre : usuario.nombre,
-      apellidos !== undefined ? apellidos : usuario.apellidos,
-      idioma !== undefined ? idioma : usuario.idioma,
-      idsJSON,
-      nombresJSON,
-      rolFinal,
-      id
-    );
+    });
+    actualizar();
 
     const actualizado = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
     return res.json(formatUsuario(actualizado));
   } catch (err) {
+    if (err.message && err.message.includes('UNIQUE')) {
+      return res.status(409).json({ error: 'El correo ya existe' });
+    }
     console.error(err);
     return res.status(500).json({ error: 'Error al actualizar usuario' });
   }

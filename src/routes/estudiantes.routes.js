@@ -170,7 +170,7 @@ router.post('/', auth, (req, res) => {
 
 router.put('/:id', auth, (req, res) => {
   const { id } = req.params;
-  const { nombre, correo, movilidad, necesidades_especiales, ruta_imagen } = req.body;
+  const { nombre, dni, correo, movilidad, necesidades_especiales, ruta_imagen } = req.body;
 
   try {
     const estudiante = db.prepare('SELECT * FROM estudiantes WHERE id = ?').get(id);
@@ -178,13 +178,21 @@ router.put('/:id', auth, (req, res) => {
       return res.status(404).json({ error: 'Estudiante no encontrado' });
     }
 
+    const nuevoDni =
+      dni !== undefined ? (dni && dni.trim() !== '' ? dni.trim() : null) : estudiante.dni;
+    const nuevoCorreo =
+      correo !== undefined
+        ? (correo && correo.trim() !== '' ? correo.trim() : null)
+        : estudiante.correo;
+
     db.prepare(`
       UPDATE estudiantes
-      SET nombre = ?, correo = ?, movilidad = ?, necesidades_especiales = ?, ruta_imagen = ?
+      SET nombre = ?, dni = ?, correo = ?, movilidad = ?, necesidades_especiales = ?, ruta_imagen = ?
       WHERE id = ?
     `).run(
       nombre !== undefined ? nombre : estudiante.nombre,
-      correo !== undefined ? correo : estudiante.correo,
+      nuevoDni,
+      nuevoCorreo,
       movilidad !== undefined ? movilidad : estudiante.movilidad,
       necesidades_especiales !== undefined ? necesidades_especiales : estudiante.necesidades_especiales,
       ruta_imagen !== undefined ? ruta_imagen : estudiante.ruta_imagen,
@@ -194,6 +202,10 @@ router.put('/:id', auth, (req, res) => {
     const actualizado = db.prepare('SELECT * FROM estudiantes WHERE id = ?').get(id);
     return res.json(actualizado);
   } catch (err) {
+    if (err && err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      const campo = /dni/i.test(err.message) ? 'DNI' : 'correo';
+      return res.status(400).json({ error: `Ya existe otro alumno con ese ${campo}` });
+    }
     console.error(err);
     return res.status(500).json({ error: 'Error al actualizar estudiante' });
   }
@@ -201,7 +213,7 @@ router.put('/:id', auth, (req, res) => {
 
 router.get('/:id/estadisticas', auth, (req, res) => {
   const { id } = req.params;
-  const { id_asignatura } = req.query;
+  const { id_asignatura, id_grupo } = req.query;
 
   try {
     const estudiante = db.prepare('SELECT * FROM estudiantes WHERE id = ?').get(id);
@@ -249,7 +261,10 @@ router.get('/:id/estadisticas', auth, (req, res) => {
         FROM estudiantes_asignatura_grupo eag
         JOIN grupos g ON g.id = eag.id_grupo
         WHERE eag.id_estudiante_asignatura = ?
-      `).all(ea.id_estudiante_asignatura);
+        ${id_grupo ? 'AND g.id = ?' : ''}
+      `).all(...(id_grupo
+        ? [ea.id_estudiante_asignatura, id_grupo]
+        : [ea.id_estudiante_asignatura]));
 
       let totalSesiones = 0;
       let sesionesAsistidas = 0;
@@ -440,6 +455,8 @@ router.get('/:id/heatmap', auth, (req, res) => {
              CASE
                WHEN SUM(CASE WHEN en.entrega = 'Si' AND en.valoracion BETWEEN 1 AND 3 THEN 1 ELSE 0 END) > 0
                  THEN ROUND(AVG(CASE WHEN en.entrega = 'Si' AND en.valoracion BETWEEN 1 AND 3 THEN en.valoracion END))
+               WHEN SUM(CASE WHEN en.entrega = 'Si' THEN 1 ELSE 0 END) > 0
+                 THEN 4
                WHEN SUM(CASE WHEN en.entrega = 'No' THEN 1 ELSE 0 END) > 0
                  THEN 0
                ELSE NULL
@@ -553,13 +570,27 @@ router.post('/:id/cambiar-grupo', auth, (req, res) => {
 
 router.put('/:id/matricula', auth, (req, res) => {
   const { id } = req.params;
-  const { id_asignatura, matricula } = req.body;
+  const {
+    id_asignatura,
+    matricula,
+    convocatorias,
+    matriculas,
+    evaluacion_diferenciada,
+  } = req.body;
 
-  if (!id_asignatura || (matricula !== 'Si' && matricula !== 'No')) {
-    return res.status(400).json({
-      error: 'id_asignatura es obligatorio y matricula debe ser "Si" o "No"',
-    });
+  if (!id_asignatura) {
+    return res.status(400).json({ error: 'id_asignatura es obligatorio' });
   }
+  if (matricula !== undefined && matricula !== 'Si' && matricula !== 'No') {
+    return res.status(400).json({ error: 'matricula debe ser "Si" o "No"' });
+  }
+
+  // Convierte a entero no negativo; si no es válido, conserva el valor actual.
+  const enteroNoNegativo = (valor, actual) => {
+    if (valor === undefined || valor === null || valor === '') return actual;
+    const n = parseInt(valor, 10);
+    return Number.isInteger(n) && n >= 0 ? n : actual;
+  };
 
   try {
     const ea = db
@@ -571,7 +602,19 @@ router.put('/:id/matricula', auth, (req, res) => {
       return res.status(404).json({ error: 'El estudiante no está matriculado en esa asignatura' });
     }
 
-    db.prepare('UPDATE estudiantes_asignatura SET matricula = ? WHERE id = ?').run(matricula, ea.id);
+    const nuevaMatricula = matricula !== undefined ? matricula : ea.matricula;
+    const nuevaEvalDif =
+      evaluacion_diferenciada !== undefined
+        ? (evaluacion_diferenciada === 'Si' ? 'Si' : 'No')
+        : ea.evaluacion_diferenciada;
+    const nuevasConvocatorias = enteroNoNegativo(convocatorias, ea.convocatorias);
+    const nuevasMatriculas = enteroNoNegativo(matriculas, ea.matriculas);
+
+    db.prepare(
+      `UPDATE estudiantes_asignatura
+       SET matricula = ?, convocatorias = ?, matriculas = ?, evaluacion_diferenciada = ?
+       WHERE id = ?`
+    ).run(nuevaMatricula, nuevasConvocatorias, nuevasMatriculas, nuevaEvalDif, ea.id);
 
     const actualizado = db
       .prepare('SELECT * FROM estudiantes_asignatura WHERE id = ?')

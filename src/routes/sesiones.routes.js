@@ -8,15 +8,19 @@ router.get('/', auth, (req, res) => {
   const { id_grupo } = req.query;
 
   try {
-    let query = 'SELECT * FROM sesiones WHERE 1=1';
+    let query = `
+      SELECT s.*, u.nombre AS nombre_profesor, u.apellidos AS apellidos_profesor
+      FROM sesiones s
+      LEFT JOIN usuarios u ON u.id = s.id_profesor
+      WHERE 1=1`;
     const params = [];
 
     if (id_grupo) {
-      query += ' AND id_grupo = ?';
+      query += ' AND s.id_grupo = ?';
       params.push(id_grupo);
     }
 
-    query += ' ORDER BY fecha DESC, hora_inicio DESC';
+    query += ' ORDER BY s.fecha DESC, s.hora_inicio DESC';
     const sesiones = db.prepare(query).all(...params);
 
     const getConceptos = db.prepare('SELECT * FROM conceptos WHERE id_sesion = ?');
@@ -253,10 +257,14 @@ router.get('/:id/buscar-otros-grupos', auth, (req, res) => {
          WHERE ea.id_asignatura = ?
            AND g.tipo = ?
            AND g.id <> ?
-           AND (e.nombre LIKE ? OR e.dni LIKE ? OR e.correo LIKE ?)
+           AND e.correo LIKE ?
+           AND NOT EXISTS (
+             SELECT 1 FROM asistencia_sesion a2
+             WHERE a2.id_sesion = ? AND a2.id_estudiante_asignatura_grupo = eag.id
+           )
          ORDER BY e.nombre LIMIT 50`
       )
-      .all(sesion.id_asignatura, sesion.tipo, sesion.id_grupo, termino, termino, termino);
+      .all(sesion.id_asignatura, sesion.tipo, sesion.id_grupo, termino, sesion.id);
 
     return res.json(resultados);
   } catch (err) {

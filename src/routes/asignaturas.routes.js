@@ -8,16 +8,10 @@ const router = express.Router();
 router.get('/', auth, (req, res) => {
   try {
     if (req.user.rol === 0) {
-      const idsAsignadas = new Set();
-      for (const u of db.prepare('SELECT ids_asignatura FROM usuarios').all()) {
-        try {
-          JSON.parse(u.ids_asignatura || '[]').forEach((x) => {
-            const n = Number(x);
-            if (!Number.isNaN(n)) idsAsignadas.add(n);
-          });
-        } catch (_) {  }
-      }
-      const lista = [...idsAsignadas];
+      const lista = db
+        .prepare('SELECT DISTINCT id_asignatura FROM usuarios_asignatura')
+        .all()
+        .map((f) => f.id_asignatura);
       const ph = lista.length ? lista.map(() => '?').join(',') : 'NULL';
       const asignaturas = db.prepare(
         `SELECT ca.* FROM catalogo_asignaturas ca
@@ -29,18 +23,10 @@ router.get('/', auth, (req, res) => {
       return res.json(asignaturas);
     }
 
-    const usuario = db
-      .prepare('SELECT ids_asignatura FROM usuarios WHERE id = ?')
-      .get(req.user.id);
-
-    let idsAsignadas = [];
-    try {
-      idsAsignadas = JSON.parse(usuario?.ids_asignatura || '[]')
-        .map((x) => Number(x))
-        .filter((x) => !Number.isNaN(x));
-    } catch (_) {
-      idsAsignadas = [];
-    }
+    const idsAsignadas = db
+      .prepare('SELECT id_asignatura FROM usuarios_asignatura WHERE id_usuario = ?')
+      .all(req.user.id)
+      .map((f) => f.id_asignatura);
 
     const placeholders = idsAsignadas.length
       ? idsAsignadas.map(() => '?').join(',')
@@ -116,27 +102,15 @@ router.get('/:id', auth, (req, res) => {
 
 router.get('/:id/profesores', auth, (req, res) => {
   try {
-    const idAsignatura = String(req.params.id);
-    const profesores = db
-      .prepare('SELECT id, nombre, apellidos, ids_asignatura FROM usuarios')
-      .all();
-
-    const resultado = [];
-    for (const p of profesores) {
-      let ids = [];
-      try {
-        ids = JSON.parse(p.ids_asignatura || '[]');
-      } catch (_) {
-        ids = [];
-      }
-      if (ids.map(String).includes(idAsignatura)) {
-        resultado.push({
-          id: p.id,
-          nombre: p.nombre,
-          apellidos: p.apellidos,
-        });
-      }
-    }
+    const resultado = db
+      .prepare(
+        `SELECT u.id, u.nombre, u.apellidos
+         FROM usuarios u
+         JOIN usuarios_asignatura ua ON ua.id_usuario = u.id
+         WHERE ua.id_asignatura = ?
+         ORDER BY u.nombre, u.apellidos`
+      )
+      .all(req.params.id);
     return res.json(resultado);
   } catch (err) {
     console.error(err);

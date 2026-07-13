@@ -38,8 +38,7 @@ router.post('/login', async (req, res) => {
         apellidos: usuario.apellidos,
         correo: usuario.correo,
         rol: usuario.rol,
-        ids_asignatura: parseJSON(usuario.ids_asignatura),
-        nombres_asignatura: parseJSON(usuario.nombres_asignatura),
+        ...asignaturasDeUsuario(usuario.id),
         idioma: usuario.idioma,
         ruta_imagen: usuario.ruta_imagen,
       },
@@ -50,12 +49,20 @@ router.post('/login', async (req, res) => {
   }
 });
 
-function parseJSON(value) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return [];
-  }
+function asignaturasDeUsuario(idUsuario) {
+  const filas = db
+    .prepare(
+      `SELECT ca.id, ca.nombre
+       FROM usuarios_asignatura ua
+       JOIN catalogo_asignaturas ca ON ca.id = ua.id_asignatura
+       WHERE ua.id_usuario = ?
+       ORDER BY ca.id`
+    )
+    .all(idUsuario);
+  return {
+    ids_asignatura: filas.map((f) => f.id),
+    nombres_asignatura: filas.map((f) => f.nombre),
+  };
 }
 
 module.exports = router;

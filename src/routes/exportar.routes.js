@@ -69,49 +69,64 @@ router.get('/:id/exportar', auth, (req, res) => {
       'SELECT * FROM entregas WHERE id_sesion = ? AND id_estudiante_asignatura_grupo = ?'
     );
     const stmtConceptos = db.prepare(
-      'SELECT * FROM conceptos WHERE id_sesion = ?'
+      'SELECT * FROM conceptos WHERE id_sesion = ? ORDER BY id'
     );
     const stmtValoracion = db.prepare(
       'SELECT * FROM valoraciones WHERE id_concepto = ? AND id_estudiante_asignatura_grupo = ?'
     );
+
+    const conceptosPorTipo = {};
+    const vistosPorTipo = {};
+    for (const { tipo } of TIPOS_HOJA) {
+      conceptosPorTipo[tipo] = [];
+      vistosPorTipo[tipo] = new Set();
+    }
+    const registrarConcepto = (tipo, descripcion) => {
+      if (!vistosPorTipo[tipo].has(descripcion)) {
+        vistosPorTipo[tipo].add(descripcion);
+        conceptosPorTipo[tipo].push(descripcion);
+      }
+    };
+    const colNota = (d) => `${d} (nota)`;
+    const colComentario = (d) => `${d} (comentario)`;
 
     for (const grupo of grupos) {
       const estudiantes = stmtEstudiantes.all(grupo.id);
       const sesiones = stmtSesiones.all(grupo.id);
       const destino = filasPorTipo[grupo.tipo] || (filasPorTipo[grupo.tipo] = []);
 
+      const conceptosDeSesion = {};
+      for (const sesion of sesiones) {
+        const cs = stmtConceptos.all(sesion.id);
+        conceptosDeSesion[sesion.id] = cs;
+        for (const c of cs) registrarConcepto(grupo.tipo, c.descripcion);
+      }
+
       for (const est of estudiantes) {
         for (const sesion of sesiones) {
           const asistencia = stmtAsistencia.get(sesion.id, est.id_eag);
           const entrega = stmtEntrega.get(sesion.id, est.id_eag);
 
-          const conceptosTxt = [];
-          const comentariosTxt = [];
-          for (const concepto of stmtConceptos.all(sesion.id)) {
-            const valoracion = stmtValoracion.get(concepto.id, est.id_eag);
-            if (!valoracion) continue;
-            conceptosTxt.push(
-              valoracion.valoracion != null
-                ? `${concepto.descripcion}: ${valoracion.valoracion}`
-                : concepto.descripcion
-            );
-            if (valoracion.comentario) {
-              comentariosTxt.push(`${concepto.descripcion}: ${valoracion.comentario}`);
-            }
-          }
-
-          destino.push({
+          const fila = {
             'Estudiante': est.nombre,
             'DNI': est.dni,
             'Grupo': grupo.nombre,
             'Asistencia': asistencia ? asistencia.asistencia : 'No',
             'Entrega': entrega ? entrega.entrega : '',
             'Comentario entrega': entrega ? (entrega.comentario || '') : '',
-            'Conceptos a evaluar': conceptosTxt.join('; '),
-            'Comentario conceptos': comentariosTxt.join('; '),
-            'Fecha': sesion.fecha,
-            'Hora': sesion.hora_inicio || '',
-          });
+          };
+
+          for (const concepto of conceptosDeSesion[sesion.id]) {
+            const valoracion = stmtValoracion.get(concepto.id, est.id_eag);
+            if (!valoracion) continue;
+            fila[colNota(concepto.descripcion)] =
+              valoracion.valoracion != null ? valoracion.valoracion : '';
+            fila[colComentario(concepto.descripcion)] = valoracion.comentario || '';
+          }
+
+          fila['Fecha'] = sesion.fecha;
+          fila['Hora'] = sesion.hora_inicio || '';
+          destino.push(fila);
         }
       }
     }
@@ -143,10 +158,51 @@ router.get('/:id/exportar', auth, (req, res) => {
       WHERE eag.id_estudiante_asignatura = ?
     `);
     const nombreGrado = titulacion ? titulacion.nombre : '';
+
+    // Estadísticas de seguimiento por alumno (asistencia y entregas).
+    const stmtEagsAlumno = db.prepare(`
+      SELECT eag.id AS id_eag, g.id AS id_grupo, g.entregas_activadas
+      FROM estudiantes_asignatura_grupo eag
+      JOIN grupos g ON g.id = eag.id_grupo
+      WHERE eag.id_estudiante_asignatura = ?
+    `);
+    const stmtNumSesiones = db.prepare('SELECT COUNT(*) AS n FROM sesiones WHERE id_grupo = ?');
+    const stmtNumAsistencias = db.prepare(
+      "SELECT COUNT(*) AS n FROM asistencia_sesion WHERE id_estudiante_asignatura_grupo = ? AND asistencia = 'Si'"
+    );
+    const stmtNumEntregas = db.prepare(
+      "SELECT COUNT(*) AS n FROM entregas WHERE id_estudiante_asignatura_grupo = ? AND entrega = 'Si'"
+    );
+    const seguimientoAlumno = (idEa) => {
+      let sesiones = 0, asistencias = 0, entregas = 0, sesionesConEntrega = 0;
+      for (const eag of stmtEagsAlumno.all(idEa)) {
+        if (id_grupo && String(eag.id_grupo) !== String(id_grupo)) continue;
+        const nSes = stmtNumSesiones.get(eag.id_grupo).n;
+        sesiones += nSes;
+        asistencias += stmtNumAsistencias.get(eag.id_eag).n;
+        entregas += stmtNumEntregas.get(eag.id_eag).n;
+        if (eag.entregas_activadas) sesionesConEntrega += nSes;
+      }
+      const pct = sesiones ? Math.round((asistencias / sesiones) * 100) : 0;
+      return {
+        asistencias: `${asistencias}/${sesiones}`,
+        pctAsistencia: `${pct}%`,
+        entregas: sesionesConEntrega ? `${entregas}/${sesionesConEntrega}` : '',
+      };
+    };
+
+    // Cabecera con los datos de la asignatura (formato del listado de SIES),
+    // de modo que el fichero exportado identifica la asignatura y puede volver
+    // a importarse.
     const filasResumen = [
+      ['Plan:', nombreGrado],
+      ['Asignatura:', asignatura.nombre],
+      ['Código:', asignatura.codigo],
+      [],
       ['DNI', 'Alumno', 'Email', 'Grado', 'Convocatorias', 'Matrículas',
         'Evalución Diferenciada', 'Movilidad Erasmus', 'Clases Expositivas',
-        'Prácticas de Aula/Semina', 'Prácticas de Laboratorio', 'Tutorías Grupales'],
+        'Prácticas de Aula/Semina', 'Prácticas de Laboratorio', 'Tutorías Grupales',
+        'Asistencias', '% Asistencia', 'Entregas'],
     ];
     const soloGrupo = id_grupo ? grupos[0] : null;
     alumnos.forEach((a) => {
@@ -160,12 +216,14 @@ router.get('/:id/exportar', auth, (req, res) => {
       }
       const etiqueta = (tipo) =>
         g[tipo] ? PREFIJO_GRUPO[tipo](g[tipo]) : '';
+      const seg = seguimientoAlumno(a.id_ea);
       filasResumen.push([
         a.dni || '', a.nombre || '', a.correo || '', a.plan || nombreGrado,
         a.convocatorias ?? '', a.matriculas ?? '',
         a.evaluacion_diferenciada || 'No', a.movilidad || 'No',
         etiqueta('Teoría'), etiqueta('Aula'),
         etiqueta('Laboratorio'), etiqueta('Tutoría Grupal'),
+        seg.asistencias, seg.pctAsistencia, seg.entregas,
       ]);
     });
     const hojaResumen = XLSX.utils.aoa_to_sheet(filasResumen);
@@ -173,22 +231,25 @@ router.get('/:id/exportar', auth, (req, res) => {
 
     const agregarHoja = (nombre, filas, columnas) => {
       const hoja = filas.length > 0
-        ? XLSX.utils.json_to_sheet(filas)
+        ? XLSX.utils.json_to_sheet(filas, { header: columnas })
         : XLSX.utils.aoa_to_sheet([columnas]);
-      const cabeceras = filas.length > 0 ? Object.keys(filas[0]) : columnas;
-      hoja['!cols'] = cabeceras.map((c) => ({
-        wch: Math.max(c.length + 2, 12),
+      hoja['!cols'] = columnas.map((c) => ({
+        wch: Math.max(String(c).length + 2, 12),
       }));
       XLSX.utils.book_append_sheet(workbook, hoja, nombre);
     };
 
-    const COLUMNAS_TIPO = [
+    const COLUMNAS_BASE = [
       'Estudiante', 'DNI', 'Grupo', 'Asistencia', 'Entrega', 'Comentario entrega',
-      'Conceptos a evaluar', 'Comentario conceptos', 'Fecha', 'Hora',
     ];
     for (const { tipo, hoja } of TIPOS_HOJA) {
       if (id_grupo && !grupos.some((g) => g.tipo === tipo)) continue;
-      agregarHoja(hoja, filasPorTipo[tipo], COLUMNAS_TIPO);
+      const colsConceptos = [];
+      for (const d of conceptosPorTipo[tipo]) {
+        colsConceptos.push(colNota(d), colComentario(d));
+      }
+      const columnas = [...COLUMNAS_BASE, ...colsConceptos, 'Fecha', 'Hora'];
+      agregarHoja(hoja, filasPorTipo[tipo], columnas);
     }
 
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
