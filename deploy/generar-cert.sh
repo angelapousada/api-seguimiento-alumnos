@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
 #
-# Genera un certificado TLS autofirmado válido para las direcciones (IP o
-# dominio) desde las que se accede al servidor. Es IMPRESCINDIBLE que la
-# dirección que se escribe en el navegador (p. ej. la IP de la VM de la UO)
-# figure en el SAN del certificado; de lo contrario el navegador lo rechaza
-# con un error del tipo "la conexión no es segura" / ERR_CERT_COMMON_NAME_INVALID.
+# Genera un certificado TLS autofirmado. Las direcciones (IP/dominio) que se
+# pasan como argumentos se incluyen en el SAN. Salida: certs/cert.pem y certs/key.pem.
 #
-# Uso:
-#   ./generar-cert.sh 156.35.163.125
-#   ./generar-cert.sh 156.35.163.125 seguimiento.uniovi.es 127.0.0.1
-#
-# Genera certs/cert.pem y certs/key.pem. Después hay que copiarlos a la VM:
-#   scp certs/cert.pem certs/key.pem angela@156.35.163.125:~/
-#   VM: sudo cp cert.pem key.pem /etc/caddy/certs/ && sudo systemctl restart caddy
+# Uso: ./generar-cert.sh 156.35.163.125 [más direcciones...]
 #
 set -euo pipefail
 

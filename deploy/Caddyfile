@@ -1,25 +1,7 @@
-# La máquina es de uso interno (red de la Universidad / VPN). En su lugar,
-# Caddy termina TLS en el 443 con un certificado autofirmado para la dirección
-# del servidor. Bajo esa única dirección sirve:
-#   - /api/*      y /uploads/*  → la API Node (HTTP plano en 127.0.0.1:3000)
-#   - el resto                  → la app web Flutter (SPA) compilada en disco
-#
-# Requisitos previos:
-#   1) La API corriendo en 127.0.0.1:3000 (servicio systemd, en HTTP, con
-#      HOST=127.0.0.1 y SIN SSL_KEY/SSL_CERT en su .env).
-#   2) La web Flutter compilada y copiada al directorio 'root' de abajo.
-#   3) El certificado y su clave copiados a /etc/caddy/certs/ y legibles por Caddy.
-#
-# Instalación de Caddy (Debian/Ubuntu):
-#   sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-#   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-#   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-#   sudo apt update && sudo apt install caddy
-#
-# Uso:
-#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
-#   sudo systemctl restart caddy
-#   journalctl -u caddy -f
+# Proxy inverso para el despliegue interno (red UO / VPN). Caddy termina TLS en
+# el 443 con certificado autofirmado y reparte: /api/* y /uploads/* → API Node
+# (127.0.0.1:3000), el resto → la web Flutter en disco.
+# Instalar: sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 
 # Caddy escucha SOLO en el 443. Al ser interno, la redirección HTTP no hace falta.
 {

@@ -12,13 +12,10 @@ function abrirConexion() {
   return conn;
 }
 
-// Conexión viva. Se reasigna al restaurar una copia de seguridad.
+// Conexión viva (se reasigna al restaurar una copia). Se expone vía Proxy para
+// que las referencias de otros módulos sigan usando la conexión actual.
 let conexion = abrirConexion();
 
-// Los demás módulos hacen `require('../config/db')` una sola vez, así que
-// exponemos un Proxy que siempre delega en la conexión actual. Así, tras
-// restaurar una copia (que crea una conexión nueva), esas referencias siguen
-// apuntando a la base de datos correcta sin quedarse obsoletas.
 const helpers = {};
 const db = new Proxy(
   {},
@@ -226,9 +223,7 @@ ensureColumn('usuarios', 'ruta_imagen', "TEXT DEFAULT 'Sin asignar'");
 ensureColumn('grupos', 'entregas_activadas', 'INTEGER DEFAULT 0');
 db.prepare("UPDATE grupos SET entregas_activadas = 1 WHERE tipo = 'Laboratorio'").run();
 
-// Migración: traslada la relación profesor-asignatura, antes desnormalizada en
-// las columnas usuarios.ids_asignatura/nombres_asignatura, a la tabla
-// intermedia usuarios_asignatura.
+// Migración: pasa la relación profesor-asignatura a la tabla usuarios_asignatura.
 function migrarUsuariosAsignatura() {
   const cols = db.prepare('PRAGMA table_info(usuarios)').all();
   if (!cols.some((c) => c.name === 'ids_asignatura')) return;
@@ -248,8 +243,7 @@ function migrarUsuariosAsignatura() {
       }
       for (const x of ids) {
         const n = Number(x);
-        // Se descartan los identificadores que ya no existen en el catálogo
-        // para no violar la clave foránea.
+        // Descartar identificadores que ya no existen en el catálogo (FK).
         if (!Number.isNaN(n) && existeAsignatura.get(n)) {
           insertar.run(u.id, n);
         }
@@ -402,8 +396,7 @@ function seedAdmin() {
 
 seedAdmin();
 
-// Devuelve una imagen completa (Buffer) de la base de datos actual, lista para
-// descargar como fichero de copia de seguridad.
+// Imagen (Buffer) de la BD actual, para descargar como copia de seguridad.
 function serializarBaseDatos() {
   conexion.pragma('wal_checkpoint(TRUNCATE)');
   return conexion.serialize();
@@ -432,8 +425,7 @@ function serializarBaseDatosSinImagenes() {
   }
 }
 
-// Guarda una copia de seguridad del estado actual en BACKUP_DIR y devuelve la
-// ruta del fichero generado.
+// Guarda una copia en BACKUP_DIR y devuelve su ruta.
 function guardarCopiaSeguridad(sello) {
   if (!fs.existsSync(BACKUP_DIR)) {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
@@ -444,15 +436,12 @@ function guardarCopiaSeguridad(sello) {
   return destino;
 }
 
-// Reemplaza la base de datos en una sola operación: valida el fichero recibido,
-// guarda una copia de seguridad del estado actual y sustituye la BD viva.
+// Reemplaza la BD: valida el fichero, guarda copia del estado actual y sustituye.
 function reemplazarBaseDatos(buffer) {
   const tmp = DB_PATH + '.nuevo';
   fs.writeFileSync(tmp, buffer);
 
-  // 1. Validar que el fichero es una BD SQLite coherente con este proyecto.
-  //    Se valida sobre un fichero real (no un Buffer) para que el modo WAL de
-  //    la cabecera pueda gestionarse correctamente.
+  // Validar que sea una BD SQLite de esta app (sobre fichero real, por el WAL).
   let prueba;
   try {
     prueba = new Database(tmp);
@@ -474,22 +463,22 @@ function reemplazarBaseDatos(buffer) {
     );
   }
   prueba.close();
-  // Limpiar los ficheros auxiliares WAL del temporal antes de sustituir.
+  // Limpiar los auxiliares WAL del temporal.
   for (const ext of ['-wal', '-shm']) {
     fs.rmSync(tmp + ext, { force: true });
   }
 
-  // 2. Copia de seguridad automática del estado actual antes de reemplazar.
+  // Copia de seguridad del estado actual antes de reemplazar.
   const copiaPrevia = guardarCopiaSeguridad();
 
-  // 3. Cerrar la conexión viva y sustituir la BD de forma atómica.
+  // Cerrar la conexión y sustituir la BD.
   conexion.close();
   for (const ext of ['-wal', '-shm']) {
     fs.rmSync(DB_PATH + ext, { force: true });
   }
   fs.renameSync(tmp, DB_PATH);
 
-  // 4. Reabrir la conexión sobre la BD restaurada.
+  // Reabrir sobre la BD restaurada.
   conexion = abrirConexion();
 
   return { copiaPrevia };

@@ -50,6 +50,7 @@ router.get('/:id/exportar', auth, (req, res) => {
     const stmtEstudiantes = db.prepare(`
       SELECT
         eag.id AS id_eag,
+        ea.id AS id_ea,
         e.nombre,
         e.dni
       FROM estudiantes_asignatura_grupo eag
@@ -97,8 +98,40 @@ router.get('/:id/exportar', auth, (req, res) => {
       return NIVEL_ENTREGA[entrega.valoracion] || 'SIN_EVALUAR';
     };
 
-    for (const grupo of grupos) {
-      const estudiantes = stmtEstudiantes.all(grupo.id);
+    // Al exportar un grupo, se incluye la actividad de sus alumnos en todos sus grupos.
+    const idsEaObjetivo = id_grupo
+      ? new Set(
+          db
+            .prepare(
+              `SELECT id_estudiante_asignatura AS id_ea
+               FROM estudiantes_asignatura_grupo WHERE id_grupo = ?`
+            )
+            .all(id_grupo)
+            .map((r) => r.id_ea)
+        )
+      : null;
+    const gruposDatos = id_grupo
+      ? db
+          .prepare(`
+            SELECT DISTINCT g.*
+            FROM grupos g
+            JOIN estudiantes_asignatura_grupo eag ON eag.id_grupo = g.id
+            WHERE g.id_asignatura = ?
+              AND eag.id_estudiante_asignatura IN (
+                SELECT id_estudiante_asignatura
+                FROM estudiantes_asignatura_grupo
+                WHERE id_grupo = ?
+              )
+            ORDER BY g.tipo, g.nombre
+          `)
+          .all(id, id_grupo)
+      : grupos;
+
+    for (const grupo of gruposDatos) {
+      let estudiantes = stmtEstudiantes.all(grupo.id);
+      if (idsEaObjetivo) {
+        estudiantes = estudiantes.filter((e) => idsEaObjetivo.has(e.id_ea));
+      }
       const sesiones = stmtSesiones.all(grupo.id);
       const destino = filasPorTipo[grupo.tipo] || (filasPorTipo[grupo.tipo] = []);
 
@@ -198,9 +231,7 @@ router.get('/:id/exportar', auth, (req, res) => {
       };
     };
 
-    // Cabecera con los datos de la asignatura (formato del listado de SIES),
-    // de modo que el fichero exportado identifica la asignatura y puede volver
-    // a importarse.
+    // Cabecera con los datos de la asignatura (formato SIES), para reimportar.
     const filasResumen = [
       ['Plan:', nombreGrado],
       ['Asignatura:', asignatura.nombre],
@@ -213,10 +244,7 @@ router.get('/:id/exportar', auth, (req, res) => {
     ];
     alumnos.forEach((a) => {
       const g = { 'Teoría': '', 'Aula': '', 'Laboratorio': '', 'Tutoría Grupal': '' };
-      // Aunque se haya exportado un único grupo, el listado refleja la
-      // pertenencia completa del alumno a todos los tipos de grupo
-      // (Clases Expositivas, Prácticas de Aula, Laboratorio y Tutorías
-      // Grupales), tal como aparece en el modelo de datos de la memoria.
+      // Pertenencia del alumno a todos los tipos de grupo, aunque se exporte uno solo.
       for (const row of stmtGruposAlumno.all(a.id_ea)) {
         if (row.tipo in g) g[row.tipo] = row.nombre;
       }
@@ -249,7 +277,8 @@ router.get('/:id/exportar', auth, (req, res) => {
       'Estudiante', 'DNI', 'Grupo', 'Asistencia', 'Entrega', 'Comentario entrega',
     ];
     for (const { tipo, hoja } of TIPOS_HOJA) {
-      if (id_grupo && !grupos.some((g) => g.tipo === tipo)) continue;
+      // Una hoja por cada tipo de grupo con datos (las vacías se omiten).
+      if (id_grupo && filasPorTipo[tipo].length === 0) continue;
       const colsConceptos = [];
       for (const d of conceptosPorTipo[tipo]) {
         colsConceptos.push(colNota(d), colComentario(d));

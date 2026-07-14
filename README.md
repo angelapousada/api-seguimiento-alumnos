@@ -56,7 +56,7 @@ y **certificado autofirmado**. Guía completa en la memoria. Pasos:
 2. **API** en `/opt/api-seguimiento-alumnos`, `.env` con `HOST=127.0.0.1`,
    `PORT=3000`, `JWT_SECRET` nuevo y `SSL_KEY`/`SSL_CERT` comentadas (el TLS lo
    pone Caddy). Arranque con `systemd` (`deploy/api-seguimiento.service`).
-3. **Certificado**: `./deploy/generar-certificado.sh <ip-o-dominio>` → copiar a
+3. **Certificado**: `./deploy/generar-cert.sh <ip-o-dominio>` → copiar a
    `/etc/caddy/certs/`.
 4. **Web**: `flutter build web --dart-define=API_HOST=<host>` → `/opt/app-seguimiento-web`.
 5. **Caddy**: usar `deploy/Caddyfile` (solo 443).

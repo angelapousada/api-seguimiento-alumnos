@@ -348,7 +348,7 @@ router.get('/:id/estadisticas', auth, (req, res) => {
 
       let totalEntregas = 0;
       let entregasRealizadas = 0;
-      let sumaNotasEntrega = 0; // nota por entrega: 0=mal/no entregada, 0.5=regular, 1=bien
+      let sumaNotasEntrega = 0; // escala: 0=mal/no entregada, 0.5=regular, 1=bien
 
       for (const grupo of grupos) {
         const acc = ensureTipo(grupo.tipo);
@@ -430,7 +430,7 @@ router.get('/:id/estadisticas', auth, (req, res) => {
           total: totalEntregas,
           realizadas: entregasRealizadas,
           porcentaje: totalEntregas > 0 ? Math.round((entregasRealizadas / totalEntregas) * 100) : 0,
-          // Nota media de entregas sobre 10 (0=mal/no entregada, 5=regular, 10=bien).
+          // Media sobre 10 (0=mal/no entregada, 5=regular, 10=bien).
           nota: totalEntregas > 0 ? Math.round((sumaNotasEntrega / totalEntregas) * 100) / 10 : 0
         },
         anotaciones: {

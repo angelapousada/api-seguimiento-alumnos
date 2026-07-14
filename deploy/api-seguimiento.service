@@ -1,28 +1,18 @@
 [Unit]
-# Servicio systemd para arrancar la API al iniciar la VM y reiniciarla ante fallos.
-# Instalación (en la VM, como root):
-#   1) Ajusta User, WorkingDirectory y ExecStart a la ruta real del despliegue.
-#   2) sudo cp deploy/api-seguimiento.service /etc/systemd/system/
-#   3) sudo systemctl daemon-reload
-#   4) sudo systemctl enable --now api-seguimiento
-#   Ver logs:  journalctl -u api-seguimiento -f
+# Servicio systemd de la API (arranque con la VM y reinicio ante fallos).
 Description=API Seguimiento de Alumnos (Node/Express)
 After=network.target
 
 [Service]
 Type=simple
-# Usuario sin privilegios propietario del directorio de la app (NO root).
+# Usuario sin privilegios (NO root).
 User=seguimiento
 Group=seguimiento
-# Ruta absoluta del proyecto en la VM (debe contener .env y data/).
-# En producción tras el proxy inverso (Caddy) NO se necesita certs/: el TLS lo
-# gestiona Caddy con Let's Encrypt y la API arranca en HTTP sobre 127.0.0.1.
 WorkingDirectory=/opt/api-seguimiento-alumnos
-# Ruta absoluta a node (comprueba con `which node`).
+# Ruta absoluta a node (comprobar con `which node`).
 ExecStart=/usr/bin/node src/app.js
 Restart=on-failure
 RestartSec=5
-# El proceso lee la configuración de .env (vía dotenv) desde WorkingDirectory.
 Environment=NODE_ENV=production
 # Endurecimiento básico.
 NoNewPrivileges=true

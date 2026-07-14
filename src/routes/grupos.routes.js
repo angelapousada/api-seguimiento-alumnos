@@ -137,7 +137,41 @@ router.get('/:id/estudiantes', auth, (req, res) => {
       ORDER BY e.nombre
     `).all(id);
 
-    return res.json(estudiantes);
+    const grupo = db
+      .prepare('SELECT entregas_activadas FROM grupos WHERE id = ?')
+      .get(id);
+    const entregasActivadas = grupo && grupo.entregas_activadas ? 1 : 0;
+    const totalSesiones = db
+      .prepare('SELECT COUNT(*) AS n FROM sesiones WHERE id_grupo = ?')
+      .get(id).n;
+    const stmtAsist = db.prepare(
+      "SELECT COUNT(*) AS n FROM asistencia_sesion WHERE id_estudiante_asignatura_grupo = ? AND asistencia = 'Si'"
+    );
+    const stmtEnt = db.prepare(
+      "SELECT COUNT(*) AS n FROM entregas WHERE id_estudiante_asignatura_grupo = ? AND entrega = 'Si'"
+    );
+    const pct = (n, t) => (t > 0 ? Math.round((n / t) * 100) : 0);
+
+    const conSeguimiento = estudiantes.map((e) => {
+      const asisSi = stmtAsist.get(e.id).n;
+      const entSi = stmtEnt.get(e.id).n;
+      return {
+        ...e,
+        asistencia: {
+          total: totalSesiones,
+          asistidas: asisSi,
+          porcentaje: pct(asisSi, totalSesiones),
+        },
+        entregas: {
+          activadas: entregasActivadas,
+          total: entregasActivadas ? totalSesiones : 0,
+          realizadas: entSi,
+          porcentaje: entregasActivadas ? pct(entSi, totalSesiones) : 0,
+        },
+      };
+    });
+
+    return res.json(conSeguimiento);
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error al obtener estudiantes del grupo' });

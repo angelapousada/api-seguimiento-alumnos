@@ -564,13 +564,8 @@ router.post('/asistentes', auth, upload.single('archivo'), (req, res) => {
   }
 });
 
-// Importa asistencia y entregas de laboratorio desde el libro ejemplo MTP-Grupos.
-// Cada hoja (PLn/PLIn) es un grupo de laboratorio con dos tablas que comparten
-// las columnas de sesión (0, 1_2, ..., 27_28): arriba asistencia (1=asistió) y
-// más abajo entregas (1=entregada). Solo se importan los grupos que ya tienen
-// sesiones creadas; si el Excel tiene más columnas de sesión que sesiones en la
-// app, se avisa y no se importa ese grupo; si la app tiene más, se rellenan las
-// más antiguas.
+// Importa asistencia y entregas de laboratorio del libro MTP-Grupos (una hoja
+// por grupo, con tablas de asistencia y entregas por columnas de sesión).
 router.post('/asistencia-laboratorio', auth, upload.single('archivo'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Archivo no proporcionado' });
   const idAsignatura = req.body.id_asignatura;
