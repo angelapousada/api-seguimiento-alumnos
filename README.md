@@ -49,8 +49,7 @@ host configurado; si cambia la IP, regenéralo.
 ## Despliegue en producción (VM de la UO)
 
 VM interna (red UO / VPN), proxy inverso **Caddy** en el 443 sirviendo web + API,
-y **certificado autofirmado**. Guía completa:
-**[`deploy/README-despliegue.md`](deploy/README-despliegue.md)**. Pasos:
+y **certificado autofirmado**. Guía completa en la memoria. Pasos:
 
 1. **Node 18** (NodeSource) + `build-essential python3 g++-10` (`better-sqlite3`
    necesita C++20).
