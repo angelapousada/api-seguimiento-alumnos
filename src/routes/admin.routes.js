@@ -24,6 +24,34 @@ const uploadBackup = multer({
   limits: { fileSize: 200 * 1024 * 1024 },
 });
 
+function eliminarImagenesHuerfanas() {
+  if (!fs.existsSync(PERFILES_DIR)) return 0;
+
+  const referidas = new Set();
+  const filas = [
+    ...db.prepare('SELECT ruta_imagen FROM usuarios').all(),
+    ...db.prepare('SELECT ruta_imagen FROM estudiantes').all(),
+  ];
+  for (const { ruta_imagen } of filas) {
+    if (ruta_imagen && ruta_imagen !== 'Sin asignar') {
+      referidas.add(path.basename(ruta_imagen));
+    }
+  }
+
+  let eliminadas = 0;
+  for (const nombre of fs.readdirSync(PERFILES_DIR)) {
+    const ruta = path.join(PERFILES_DIR, nombre);
+    if (!fs.statSync(ruta).isFile()) continue;
+    if (referidas.has(nombre)) continue;
+    try {
+      fs.unlinkSync(ruta);
+      eliminadas++;
+    } catch (_) {
+    }
+  }
+  return eliminadas;
+}
+
 router.post('/vaciar', auth, isAdmin, (req, res) => {
   try {
     const vaciar = db.transaction(() => {
@@ -51,9 +79,11 @@ router.post('/vaciar', auth, isAdmin, (req, res) => {
     vaciar();
     poblarDatosIniciales();
     seedAdmin();
+    const imagenesEliminadas = eliminarImagenesHuerfanas();
 
     return res.json({
       mensaje: 'Base de datos vaciada y catálogo restaurado correctamente',
+      imagenes_eliminadas: imagenesEliminadas,
     });
   } catch (err) {
     console.error(err);
@@ -78,9 +108,11 @@ router.post('/vaciar-parcial', auth, isAdmin, (req, res) => {
     });
 
     vaciar();
+    const imagenesEliminadas = eliminarImagenesHuerfanas();
 
     return res.json({
       mensaje: 'Sesiones y alumnado eliminados correctamente',
+      imagenes_eliminadas: imagenesEliminadas,
     });
   } catch (err) {
     console.error(err);

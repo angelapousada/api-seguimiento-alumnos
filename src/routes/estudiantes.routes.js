@@ -56,6 +56,31 @@ router.get('/buscar', auth, (req, res) => {
   }
 });
 
+router.get('/asignatura/:idAsignatura', auth, (req, res) => {
+  try {
+    const estudiantes = db
+      .prepare(
+        `
+        SELECT
+          e.id, e.dni, e.nombre, e.correo, e.movilidad, e.necesidades_especiales, e.ruta_imagen, e.plan,
+          ea.id AS id_estudiante_asignatura,
+          ea.matricula, ea.convocatorias, ea.matriculas, ea.evaluacion_diferenciada
+        FROM estudiantes e
+        JOIN estudiantes_asignatura ea ON ea.id_estudiante = e.id
+        WHERE ea.id_asignatura = ?
+        ORDER BY e.nombre
+      `
+      )
+      .all(req.params.idAsignatura);
+    return res.json(estudiantes);
+  } catch (err) {
+    console.error(err);
+    return res
+      .status(500)
+      .json({ error: 'Error al obtener los estudiantes de la asignatura' });
+  }
+});
+
 router.get('/:id', auth, (req, res) => {
   try {
     const estudiante = db.prepare('SELECT * FROM estudiantes WHERE id = ?').get(req.params.id);
