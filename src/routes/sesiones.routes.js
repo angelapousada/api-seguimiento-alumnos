@@ -24,10 +24,30 @@ router.get('/', auth, (req, res) => {
     const sesiones = db.prepare(query).all(...params);
 
     const getConceptos = db.prepare('SELECT * FROM conceptos WHERE id_sesion = ?');
-    const resultado = sesiones.map((s) => ({
-      ...s,
-      conceptos: getConceptos.all(s.id),
-    }));
+    
+    const getGrupo = db.prepare(
+      'SELECT entregas_activadas FROM grupos WHERE id = ?'
+    );
+    const getTotalEstudiantes = db.prepare(
+      'SELECT COUNT(*) AS n FROM estudiantes_asignatura_grupo WHERE id_grupo = ?'
+    );
+    const getAsistentes = db.prepare(
+      "SELECT COUNT(*) AS n FROM asistencia_sesion WHERE id_sesion = ? AND asistencia = 'Si'"
+    );
+    const getNumEntregas = db.prepare(
+      "SELECT COUNT(*) AS n FROM entregas WHERE id_sesion = ? AND entrega = 'Si'"
+    );
+    const resultado = sesiones.map((s) => {
+      const grupo = getGrupo.get(s.id_grupo);
+      return {
+        ...s,
+        conceptos: getConceptos.all(s.id),
+        total_estudiantes: getTotalEstudiantes.get(s.id_grupo).n,
+        asistentes: getAsistentes.get(s.id).n,
+        entregas_activadas: grupo && grupo.entregas_activadas ? 1 : 0,
+        num_entregas: getNumEntregas.get(s.id).n,
+      };
+    });
 
     return res.json(resultado);
   } catch (err) {

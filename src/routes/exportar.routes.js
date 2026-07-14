@@ -90,6 +90,13 @@ router.get('/:id/exportar', auth, (req, res) => {
     const colNota = (d) => `${d} (nota)`;
     const colComentario = (d) => `${d} (comentario)`;
 
+    const NIVEL_ENTREGA = { 1: 'MAL', 2: 'REGULAR', 3: 'CORRECTO' };
+    const etiquetaEntrega = (grupo, entrega) => {
+      if (!grupo.entregas_activadas) return '';
+      if (!entrega || entrega.entrega !== 'Si') return 'NO';
+      return NIVEL_ENTREGA[entrega.valoracion] || 'SIN_EVALUAR';
+    };
+
     for (const grupo of grupos) {
       const estudiantes = stmtEstudiantes.all(grupo.id);
       const sesiones = stmtSesiones.all(grupo.id);
@@ -112,7 +119,7 @@ router.get('/:id/exportar', auth, (req, res) => {
             'DNI': est.dni,
             'Grupo': grupo.nombre,
             'Asistencia': asistencia ? asistencia.asistencia : 'No',
-            'Entrega': entrega ? entrega.entrega : '',
+            'Entrega': etiquetaEntrega(grupo, entrega),
             'Comentario entrega': entrega ? (entrega.comentario || '') : '',
           };
 
@@ -204,15 +211,14 @@ router.get('/:id/exportar', auth, (req, res) => {
         'Prácticas de Aula/Semina', 'Prácticas de Laboratorio', 'Tutorías Grupales',
         'Asistencias', '% Asistencia', 'Entregas'],
     ];
-    const soloGrupo = id_grupo ? grupos[0] : null;
     alumnos.forEach((a) => {
       const g = { 'Teoría': '', 'Aula': '', 'Laboratorio': '', 'Tutoría Grupal': '' };
-      if (soloGrupo) {
-        g[soloGrupo.tipo] = soloGrupo.nombre;
-      } else {
-        for (const row of stmtGruposAlumno.all(a.id_ea)) {
-          if (row.tipo in g) g[row.tipo] = row.nombre;
-        }
+      // Aunque se haya exportado un único grupo, el listado refleja la
+      // pertenencia completa del alumno a todos los tipos de grupo
+      // (Clases Expositivas, Prácticas de Aula, Laboratorio y Tutorías
+      // Grupales), tal como aparece en el modelo de datos de la memoria.
+      for (const row of stmtGruposAlumno.all(a.id_ea)) {
+        if (row.tipo in g) g[row.tipo] = row.nombre;
       }
       const etiqueta = (tipo) =>
         g[tipo] ? PREFIJO_GRUPO[tipo](g[tipo]) : '';

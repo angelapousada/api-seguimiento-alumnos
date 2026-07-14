@@ -7,11 +7,11 @@
 # con un error del tipo "la conexión no es segura" / ERR_CERT_COMMON_NAME_INVALID.
 #
 # Uso:
-#   ./generar-cert.sh 156.35.163.96
-#   ./generar-cert.sh 156.35.163.96 seguimiento.uniovi.es 127.0.0.1
+#   ./generar-cert.sh 156.35.163.125
+#   ./generar-cert.sh 156.35.163.125 seguimiento.uniovi.es 127.0.0.1
 #
 # Genera certs/cert.pem y certs/key.pem. Después hay que copiarlos a la VM:
-#   scp certs/cert.pem certs/key.pem angela@156.35.163.96:~/
+#   scp certs/cert.pem certs/key.pem angela@156.35.163.125:~/
 #   VM: sudo cp cert.pem key.pem /etc/caddy/certs/ && sudo systemctl restart caddy
 #
 set -euo pipefail
@@ -21,7 +21,7 @@ mkdir -p "$DIR"
 
 if [ "$#" -eq 0 ]; then
   echo "Uso: $0 <ip-o-dominio> [más direcciones...]" >&2
-  echo "Ejemplo: $0 156.35.163.96" >&2
+  echo "Ejemplo: $0 156.35.163.125" >&2
   exit 1
 fi
 

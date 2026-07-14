@@ -72,7 +72,54 @@ router.get('/asignatura/:idAsignatura', auth, (req, res) => {
       `
       )
       .all(req.params.idAsignatura);
-    return res.json(estudiantes);
+
+    const stmtAsistencia = db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN a.asistencia = 'Si' THEN 1 ELSE 0 END) AS asistidas
+      FROM estudiantes_asignatura_grupo eag
+      JOIN sesiones s ON s.id_grupo = eag.id_grupo
+      LEFT JOIN asistencia_sesion a
+        ON a.id_sesion = s.id AND a.id_estudiante_asignatura_grupo = eag.id
+      WHERE eag.id_estudiante_asignatura = ?
+    `);
+    const stmtEntregas = db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN en.entrega = 'Si' THEN 1 ELSE 0 END) AS realizadas
+      FROM estudiantes_asignatura_grupo eag
+      JOIN grupos g ON g.id = eag.id_grupo AND g.entregas_activadas = 1
+      JOIN sesiones s ON s.id_grupo = eag.id_grupo
+      LEFT JOIN entregas en
+        ON en.id_sesion = s.id AND en.id_estudiante_asignatura_grupo = eag.id
+      WHERE eag.id_estudiante_asignatura = ?
+    `);
+    const pct = (n, total) => (total > 0 ? Math.round((n / total) * 100) : 0);
+
+    const conSeguimiento = estudiantes.map((e) => {
+      const asis = stmtAsistencia.get(e.id_estudiante_asignatura);
+      const ent = stmtEntregas.get(e.id_estudiante_asignatura);
+      const asisTotal = asis.total || 0;
+      const asisSi = asis.asistidas || 0;
+      const entTotal = ent.total || 0;
+      const entSi = ent.realizadas || 0;
+      return {
+        ...e,
+        asistencia: {
+          total: asisTotal,
+          asistidas: asisSi,
+          porcentaje: pct(asisSi, asisTotal),
+        },
+        entregas: {
+          activadas: entTotal > 0 ? 1 : 0,
+          total: entTotal,
+          realizadas: entSi,
+          porcentaje: pct(entSi, entTotal),
+        },
+      };
+    });
+
+    return res.json(conSeguimiento);
   } catch (err) {
     console.error(err);
     return res

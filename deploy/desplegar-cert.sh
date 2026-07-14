@@ -9,12 +9,12 @@
 #   - Acceso SSH a la VM (pedirá la contraseña de sudo en la VM).
 #
 # Uso:
-#   ./deploy/desplegar-cert.sh                 # usa angela@156.35.163.96
+#   ./deploy/desplegar-cert.sh                 # usa angela@156.35.163.125
 #   ./deploy/desplegar-cert.sh usuario@IP      # otra máquina
 #
 set -euo pipefail
 
-VM="${1:-angela@156.35.163.96}"
+VM="${1:-angela@156.35.163.125}"
 IP="${VM##*@}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)/certs"
 
